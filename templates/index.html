@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能起重机路径规划系统 Pro</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: { extend: {} }
+        }
+    </script>
+    <!-- Socket.IO -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+    <!-- Phosphor Icons -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <style>
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .dark ::-webkit-scrollbar-thumb { background: #475569; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        body { overflow: hidden; }
+        input[type=range] { -webkit-appearance: none; background: transparent; }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #3b82f6; cursor: pointer; margin-top: -6px;
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: #e2e8f0; border-radius: 2px;
+        }
+        .dark input[type=range]::-webkit-slider-runnable-track { background: #334155; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 flex h-screen w-screen dark:bg-slate-900 dark:text-slate-100 transition-colors duration-300">
+
+    <!-- 左侧控制面板 -->
+    <aside class="w-[380px] flex flex-col bg-white border-r border-slate-200 shadow-lg z-20 dark:bg-slate-800 dark:border-slate-700 transition-colors">
+        <!-- 标题区 -->
+        <div class="p-5 border-b border-slate-100 bg-slate-50 dark:bg-slate-800 dark:border-slate-700 flex justify-between items-center">
+            <div>
+                <h1 class="text-xl font-bold text-slate-800 dark:text-white flex items-center gap-2">
+                    <i class="ph-fill ph-crane text-blue-600 text-2xl"></i>
+                    CRANE PLANNER
+                </h1>
+                <div class="flex items-center gap-2 mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    <span id="statusDot" class="w-2 h-2 rounded-full bg-slate-300"></span>
+                    <span id="statusText">正在连接...</span>
+                </div>
+            </div>
+            <button id="themeToggle" class="p-2 rounded-full hover:bg-slate-200 dark:hover:bg-slate-700 transition text-slate-600 dark:text-slate-300">
+                <i class="ph-fill ph-moon text-xl" id="themeIcon"></i>
+            </button>
+        </div>
+
+        <!-- 滚动内容区 -->
+        <div class="flex-1 overflow-y-auto p-4 space-y-6">
+
+            <!-- 1. 交互模式 -->
+            <section>
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider dark:text-slate-500">交互模式</h2>
+                    <!-- 新增：吸附开关 -->
+                    <label class="flex items-center gap-2 cursor-pointer text-xs text-blue-600 dark:text-blue-400 font-medium select-none" title="添加物体时坐标自动取整">
+                        <input type="checkbox" id="snapToGrid" class="accent-blue-600 rounded" checked>
+                        <i class="ph-bold ph-magnet"></i> 自动吸附 (1m)
+                    </label>
+                </div>
+
+                <div class="grid grid-cols-3 gap-2">
+                    <label class="cursor-pointer">
+                        <input type="radio" name="mode" value="pan" class="peer hidden" checked>
+                        <div class="mode-btn flex flex-col items-center justify-center p-2 rounded border border-slate-200 bg-white text-slate-600 peer-checked:border-blue-500 peer-checked:bg-blue-50 peer-checked:text-blue-600 transition-all hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-300 dark:peer-checked:bg-blue-900/30 dark:peer-checked:border-blue-500 dark:peer-checked:text-blue-400 dark:hover:bg-slate-600">
+                            <i class="ph ph-hand-grabbing text-xl mb-1"></i>
+                            <span class="text-xs font-medium">漫游</span>
+                        </div>
+                    </label>
+                    <label class="cursor-pointer">
+                        <input type="radio" name="mode" value="set_start" class="peer hidden">
+                        <div class="mode-btn flex flex-col items-center justify-center p-2 rounded border border-slate-200 bg-white text-slate-600 peer-checked:border-green-500 peer-checked:bg-green-50 peer-checked:text-green-600 transition-all hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-300 dark:peer-checked:bg-green-900/30 dark:peer-checked:border-green-500 dark:peer-checked:text-green-400 dark:hover:bg-slate-600">
+                            <i class="ph ph-map-pin text-xl mb-1"></i>
+                            <span class="text-xs font-medium">设置起点</span>
+                        </div>
+                    </label>
+                    <label class="cursor-pointer">
+                        <input type="radio" name="mode" value="set_end" class="peer hidden">
+                        <div class="mode-btn flex flex-col items-center justify-center p-2 rounded border border-slate-200 bg-white text-slate-600 peer-checked:border-red-500 peer-checked:bg-red-50 peer-checked:text-red-600 transition-all hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-300 dark:peer-checked:bg-red-900/30 dark:peer-checked:border-red-500 dark:peer-checked:text-red-400 dark:hover:bg-slate-600">
+                            <i class="ph ph-flag-checkered text-xl mb-1"></i>
+                            <span class="text-xs font-medium">设置终点</span>
+                        </div>
+                    </label>
+                </div>
+                <div class="grid grid-cols-3 gap-2 mt-2">
+                    <label class="cursor-pointer">
+                        <input type="radio" name="mode" value="add_static" class="peer hidden">
+                        <div class="mode-btn flex flex-col items-center justify-center p-2 rounded border border-slate-200 bg-white text-slate-600 peer-checked:border-slate-600 peer-checked:bg-slate-100 peer-checked:text-slate-800 transition-all hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-300 dark:peer-checked:bg-slate-600 dark:peer-checked:border-slate-400 dark:peer-checked:text-white dark:hover:bg-slate-600">
+                            <i class="ph ph-wall text-xl mb-1"></i>
+                            <span class="text-xs font-medium">静态障碍</span>
+                        </div>
+                    </label>
+                    <label class="cursor-pointer">
+                        <input type="radio" name="mode" value="add_dynamic" class="peer hidden">
+                        <div class="mode-btn flex flex-col items-center justify-center p-2 rounded border border-slate-200 bg-white text-slate-600 peer-checked:border-amber-500 peer-checked:bg-amber-50 peer-checked:text-amber-600 transition-all hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-300 dark:peer-checked:bg-amber-900/30 dark:peer-checked:border-amber-500 dark:peer-checked:text-amber-400 dark:hover:bg-slate-600">
+                            <i class="ph ph-truck text-xl mb-1"></i>
+                            <span class="text-xs font-medium">动态障碍</span>
+                        </div>
+                    </label>
+                    <label class="cursor-pointer">
+                        <input type="radio" name="mode" value="remove" class="peer hidden">
+                        <div class="mode-btn flex flex-col items-center justify-center p-2 rounded border border-slate-200 bg-white text-slate-600 peer-checked:border-rose-500 peer-checked:bg-rose-50 peer-checked:text-rose-600 transition-all hover:bg-slate-50 dark:bg-slate-700 dark:border-slate-600 dark:text-slate-300 dark:peer-checked:bg-rose-900/30 dark:peer-checked:border-rose-500 dark:peer-checked:text-rose-400 dark:hover:bg-slate-600">
+                            <i class="ph ph-eraser text-xl mb-1"></i>
+                            <span class="text-xs font-medium">移除物体</span>
+                        </div>
+                    </label>
+                </div>
+                
+                <!-- 障碍物尺寸输入 (可作为默认值，也会随拖动实时变化) -->
+                <div id="obsSizeControl" class="mt-3 p-3 bg-slate-50 rounded border border-slate-200 text-xs hidden transition-all dark:bg-slate-700/50 dark:border-slate-600">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-semibold text-slate-500 dark:text-slate-400">当前尺寸 (拖动地图可调整)</span>
+                    </div>
+                    <div class="flex gap-2">
+                        <div class="flex-1">
+                            <label class="block text-slate-400 mb-1">长 (X)</label>
+                            <input type="number" id="obsWidth" value="4.0" min="0.5" step="0.5" class="w-full p-1.5 border rounded bg-white text-center dark:bg-slate-700 dark:border-slate-500 dark:text-white">
+                        </div>
+                        <div class="flex-1">
+                            <label class="block text-slate-400 mb-1">宽 (Y)</label>
+                            <input type="number" id="obsHeight" value="2.0" min="0.5" step="0.5" class="w-full p-1.5 border rounded bg-white text-center dark:bg-slate-700 dark:border-slate-500 dark:text-white">
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <hr class="border-slate-100 dark:border-slate-700">
+
+            <!-- 2. 系统配置 (可折叠) -->
+            <section class="border border-slate-200 rounded-lg overflow-hidden dark:border-slate-700">
+                <details class="group" open>
+                    <summary class="flex justify-between items-center font-medium cursor-pointer list-none p-3 bg-slate-50 hover:bg-slate-100 text-sm dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200">
+                        <span class="flex items-center gap-2"><i class="ph ph-gear"></i> 系统参数配置</span>
+                        <span class="transition group-open:rotate-180"><i class="ph ph-caret-down"></i></span>
+                    </summary>
+                    <div class="p-3 space-y-4 bg-white text-sm dark:bg-slate-800/50">
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 mb-2 dark:text-slate-400">车间尺寸 (米)</label>
+                            <div class="flex gap-2">
+                                <div class="relative flex-1">
+                                    <span class="absolute left-2 top-1.5 text-slate-400">X</span>
+                                    <input type="number" id="cfg_width" class="w-full pl-6 p-1.5 border rounded focus:border-blue-500 transition dark:bg-slate-700 dark:border-slate-600 dark:text-white" value="100">
+                                </div>
+                                <div class="relative flex-1">
+                                    <span class="absolute left-2 top-1.5 text-slate-400">Y</span>
+                                    <input type="number" id="cfg_length" class="w-full pl-6 p-1.5 border rounded focus:border-blue-500 transition dark:bg-slate-700 dark:border-slate-600 dark:text-white" value="80">
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="flex justify-between text-xs font-bold text-slate-500 mb-1 dark:text-slate-400">
+                                <span>网格分辨率</span>
+                                <span class="text-blue-600 dark:text-blue-400" id="disp_res">0.5m</span>
+                            </label>
+                            <input type="range" id="cfg_res" min="0.2" max="2.0" step="0.1" value="0.5" class="w-full" oninput="document.getElementById('disp_res').innerText = this.value + 'm'">
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 mb-2 dark:text-slate-400">起重机规格</label>
+                            <div class="space-y-2">
+                                <div class="flex justify-between items-center">
+                                    <span class="text-slate-600 dark:text-slate-300">安全足迹直径 (m)</span>
+                                    <input type="number" id="cfg_footprint" class="w-16 p-1 border rounded text-center dark:bg-slate-700 dark:border-slate-600 dark:text-white" value="5.0" step="0.5">
+                                </div>
+                                <div class="flex justify-between items-center">
+                                    <span class="text-slate-600 dark:text-slate-300">巡航高度 (m)</span>
+                                    <input type="number" id="cfg_safe_z" class="w-16 p-1 border rounded text-center dark:bg-slate-700 dark:border-slate-600 dark:text-white" value="8.0" step="0.5">
+                                </div>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-xs font-bold text-slate-500 mb-2 dark:text-slate-400">路径优化策略</label>
+                            <div class="space-y-2">
+                                <label class="flex items-center justify-between cursor-pointer">
+                                    <span class="text-slate-600 dark:text-slate-300">启用捷径优化 (Line-of-Sight)</span>
+                                    <input type="checkbox" id="cfg_shortcut" class="accent-blue-600 w-4 h-4" checked>
+                                </label>
+                                <label class="flex items-center justify-between cursor-pointer">
+                                    <span class="text-slate-600 dark:text-slate-300">启用贝塞尔平滑 (Bezier)</span>
+                                    <input type="checkbox" id="cfg_bezier" class="accent-blue-600 w-4 h-4" checked>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="pl-2 border-l-2 border-slate-100 dark:border-slate-600">
+                            <div class="mb-2">
+                                <label class="flex justify-between text-xs text-slate-500 mb-1 dark:text-slate-400">
+                                    <span>平滑度 (Smoothness)</span>
+                                    <span class="text-blue-600 dark:text-blue-400" id="disp_smooth">0.3</span>
+                                </label>
+                                <input type="range" id="cfg_smooth" min="0.1" max="0.5" step="0.05" value="0.3" class="w-full" oninput="document.getElementById('disp_smooth').innerText = this.value">
+                            </div>
+                        </div>
+                        <button id="applySettingsBtn" class="w-full py-2 bg-slate-800 text-white rounded hover:bg-slate-700 transition text-xs font-bold uppercase tracking-wide flex justify-center items-center gap-2 dark:bg-blue-600 dark:hover:bg-blue-700">
+                            <i class="ph-bold ph-floppy-disk"></i> 应用新配置
+                        </button>
+                    </div>
+                </details>
+            </section>
+            
+            <section>
+                 <h2 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 dark:text-slate-500">显示选项</h2>
+                 <div class="space-y-2 text-sm">
+                    <label class="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" id="showGrid" checked class="accent-blue-600">
+                        <span>显示物理网格 (1m)</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" id="showResolutionGrid" class="accent-blue-600">
+                        <span>显示计算微网格 (Resolution)</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" id="showFootprint" checked class="accent-blue-600">
+                        <span>显示起重机安全范围</span>
+                    </label>
+                    <label class="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
+                        <input type="checkbox" id="showPathTrace" checked class="accent-blue-600">
+                        <span>显示全路径轨迹 (Swept Volume)</span>
+                    </label>
+                 </div>
+            </section>
+        </div>
+
+        <div class="p-4 border-t border-slate-200 bg-slate-50 space-y-2 dark:bg-slate-800 dark:border-slate-700">
+            <button id="planPathBtn" class="w-full py-3 bg-blue-600 text-white rounded-lg shadow hover:bg-blue-700 active:scale-95 transition font-bold flex justify-center items-center gap-2">
+                <i class="ph-bold ph-play"></i> 开始规划路径
+            </button>
+            <button id="clearPathBtn" class="w-full py-2 bg-white border border-slate-300 text-slate-600 rounded-lg hover:bg-slate-100 transition text-sm font-medium dark:bg-slate-700 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-600">
+                清除结果
+            </button>
+        </div>
+    </aside>
+
+    <!-- 右侧画布区 -->
+    <main class="flex-1 relative bg-slate-100 overflow-hidden cursor-crosshair dark:bg-slate-900 transition-colors" id="canvasContainer">
+        <canvas id="mainCanvas" class="block touch-none"></canvas>
+        <div class="absolute top-4 left-4 bg-white/90 backdrop-blur p-2 rounded shadow text-xs text-slate-500 pointer-events-none select-none dark:bg-slate-800/90 dark:text-slate-400">
+            <div>鼠标左键: 拖动添加 / 点击选择</div>
+            <div>鼠标中键/右键: 平移画布</div>
+            <div>滚轮: 缩放视图</div>
+        </div>
+        <div id="toastContainer" class="absolute bottom-6 right-6 flex flex-col gap-2 items-end pointer-events-none"></div>
+    </main>
+
+    <script>
+        // =================================================================
+        // 1. 全局状态管理
+        // =================================================================
+        const state = {
+            connection: false,
+            config: {},
+            map: {
+                width_m: 100, length_m: 100, resolution_m: 0.5,
+                static_obstacles: {}, dynamic_obstacles: {}
+            },
+            mode: 'pan', 
+            startPos: { x: 5, y: 5 },
+            endPos: { x: 40, y: 20 },
+            pathResult: [],
+            view: { scale: 10.0, offsetX: 50, offsetY: 50, isPanning: false, lastMouse: {x:0, y:0} },
+            // 新增：绘制交互状态
+            interaction: {
+                isDrawing: false,      // 是否正在拖动绘制
+                startPos: null,        // 拖动起始点(世界坐标)
+                currentPos: null,      // 拖动当前点(世界坐标)
+                dragRect: null         // 计算出的矩形 {x, y, w, h}
+            }
+        };
+
+        const themeToggle = document.getElementById('themeToggle');
+        const html = document.documentElement;
+        const icon = document.getElementById('themeIcon');
+        themeToggle.addEventListener('click', () => {
+            html.classList.toggle('dark');
+            const isDark = html.classList.contains('dark');
+            icon.classList.toggle('ph-moon', !isDark);
+            icon.classList.toggle('ph-sun', isDark);
+            requestAnimationFrame(render);
+        });
+
+        const socket = io.connect(location.protocol + '//' + document.domain + ':' + location.port);
+        const canvas = document.getElementById('mainCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // =================================================================
+        // 2. Socket.IO 通信逻辑
+        // =================================================================
+        socket.on('connect', () => { state.connection = true; updateStatusUI('在线', 'bg-green-500'); });
+        socket.on('disconnect', () => { state.connection = false; updateStatusUI('离线', 'bg-red-500'); });
+        socket.on('update_map_state', (data) => {
+            state.map.width_m = data.width_m;
+            state.map.length_m = data.length_m;
+            state.map.resolution_m = data.resolution_m;
+            state.map.static_obstacles = data.static_obstacles;
+            state.map.dynamic_obstacles = data.dynamic_obstacles;
+            if (data.system_config) {
+                state.config = data.system_config;
+                syncUIWithConfig(state.config);
+            }
+            requestAnimationFrame(render);
+        });
+        socket.on('update_path', (path) => {
+            state.pathResult = path;
+            showToast(`路径规划完成，包含 ${path.length} 个节点`, 'success');
+            requestAnimationFrame(render);
+        });
+        socket.on('operation_success', (data) => showToast(data.message, 'success'));
+        socket.on('operation_failed', (data) => showToast(data.message, 'error'));
+
+        function updateStatusUI(text, colorClass) {
+            document.getElementById('statusText').innerText = text;
+            document.getElementById('statusDot').className = `w-2 h-2 rounded-full ${colorClass}`;
+        }
+
+        // =================================================================
+        // 3. UI 交互逻辑
+        // =================================================================
+        document.querySelectorAll('input[name="mode"]').forEach(el => {
+            el.addEventListener('change', (e) => {
+                state.mode = e.target.value;
+                const sizeCtrl = document.getElementById('obsSizeControl');
+                if (state.mode.startsWith('add_')) sizeCtrl.classList.remove('hidden');
+                else sizeCtrl.classList.add('hidden');
+            });
+        });
+        ['showGrid', 'showResolutionGrid', 'showFootprint', 'showPathTrace'].forEach(id => {
+            document.getElementById(id).addEventListener('change', () => requestAnimationFrame(render));
+        });
+        document.getElementById('applySettingsBtn').addEventListener('click', () => {
+            const newConfig = {
+                MAP_WIDTH_M: parseFloat(document.getElementById('cfg_width').value),
+                MAP_LENGTH_M: parseFloat(document.getElementById('cfg_length').value),
+                MAP_RESOLUTION_M: parseFloat(document.getElementById('cfg_res').value),
+                CRANE_FOOTPRINT_M: parseFloat(document.getElementById('cfg_footprint').value),
+                CRANE_SAFE_TRAVEL_Z_M: parseFloat(document.getElementById('cfg_safe_z').value),
+                ENABLE_SHORTCUT_OPTIMIZATION: document.getElementById('cfg_shortcut').checked,
+                ENABLE_BEZIER_SMOOTHING: document.getElementById('cfg_bezier').checked,
+                BEZIER_SMOOTHNESS: parseFloat(document.getElementById('cfg_smooth').value),
+            };
+            socket.emit('update_settings', newConfig);
+            state.pathResult = []; 
+        });
+        document.getElementById('planPathBtn').addEventListener('click', () => {
+            socket.emit('request_path', { start: state.startPos, end: state.endPos });
+        });
+        document.getElementById('clearPathBtn').addEventListener('click', () => {
+            state.pathResult = [];
+            requestAnimationFrame(render);
+        });
+
+        function syncUIWithConfig(cfg) {
+            if(!cfg) return;
+            setVal('cfg_width', cfg.MAP_WIDTH_M);
+            setVal('cfg_length', cfg.MAP_LENGTH_M);
+            setVal('cfg_res', cfg.MAP_RESOLUTION_M);
+            document.getElementById('disp_res').innerText = cfg.MAP_RESOLUTION_M + 'm';
+            setVal('cfg_footprint', cfg.CRANE_FOOTPRINT_M);
+            setVal('cfg_safe_z', cfg.CRANE_SAFE_TRAVEL_Z_M);
+            setCheck('cfg_shortcut', cfg.ENABLE_SHORTCUT_OPTIMIZATION);
+            setCheck('cfg_bezier', cfg.ENABLE_BEZIER_SMOOTHING);
+            setVal('cfg_smooth', cfg.BEZIER_SMOOTHNESS);
+            document.getElementById('disp_smooth').innerText = cfg.BEZIER_SMOOTHNESS;
+        }
+        function setVal(id, val) { if(val !== undefined) document.getElementById(id).value = val; }
+        function setCheck(id, val) { if(val !== undefined) document.getElementById(id).checked = val; }
+
+        // =================================================================
+        // 4. Canvas 渲染引擎
+        // =================================================================
+        function resizeCanvas() {
+            const container = document.getElementById('canvasContainer');
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            requestAnimationFrame(render);
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        function worldToScreen(wx, wy) {
+            return { x: wx * state.view.scale + state.view.offsetX, y: wy * state.view.scale + state.view.offsetY };
+        }
+        function screenToWorld(sx, sy) {
+            return { x: (sx - state.view.offsetX) / state.view.scale, y: (sy - state.view.offsetY) / state.view.scale };
+        }
+        
+        // 辅助：如果开启了吸附，则对坐标取整
+        function snapValue(val) {
+            const isSnap = document.getElementById('snapToGrid').checked;
+            return isSnap ? Math.round(val) : val;
+        }
+
+        function render() {
+            const isDark = html.classList.contains('dark');
+            const COLORS = {
+                bg: isDark ? '#0f172a' : '#f1f5f9',
+                gridMajor: isDark ? '#334155' : '#cbd5e1',
+                gridMinor: isDark ? '#1e293b' : '#f1f5f9',
+                gridMicro: isDark ? 'rgba(51, 65, 85, 0.3)' : 'rgba(203, 213, 225, 0.3)',
+                border: '#94a3b8',
+                staticObs: '#64748b',
+                dynamicObs: '#f59e0b',
+                dynamicStroke: '#b45309',
+                path: '#3b82f6',
+                start: '#22c55e',
+                end: '#ef4444',
+                text: isDark ? '#e2e8f0' : '#1e293b',
+                preview: isDark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.1)',
+                previewStroke: isDark ? '#fff' : '#000'
+            };
+
+            ctx.fillStyle = COLORS.bg;
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            if (document.getElementById('showGrid').checked) drawGrid(COLORS, 1.0);
+            if (document.getElementById('showResolutionGrid').checked) drawGrid(COLORS, state.map.resolution_m, true);
+            
+            const tl = worldToScreen(0, 0);
+            const br = worldToScreen(state.map.width_m, state.map.length_m);
+            ctx.strokeStyle = COLORS.border;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+
+            drawObstacles(COLORS);
+            if (document.getElementById('showPathTrace').checked) drawSweptVolume(COLORS);
+            drawPath(COLORS);
+            drawPoint(state.startPos, COLORS.start, '起点', COLORS);
+            drawPoint(state.endPos, COLORS.end, '终点', COLORS);
+            
+            // 绘制正在拖拽的障碍物预览
+            if (state.interaction.isDrawing && state.interaction.dragRect) {
+                drawPreviewObstacle(state.interaction.dragRect, COLORS);
+            }
+        }
+
+        function drawGrid(COLORS, step, isMicro=false) {
+            const w = state.map.width_m;
+            const l = state.map.length_m;
+            ctx.beginPath();
+            for (let x = 0; x <= w + 0.01; x += step) {
+                const p0 = worldToScreen(x, 0);
+                const p1 = worldToScreen(x, l);
+                ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
+            }
+            for (let y = 0; y <= l + 0.01; y += step) {
+                const p0 = worldToScreen(0, y);
+                const p1 = worldToScreen(w, y);
+                ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
+            }
+            ctx.strokeStyle = isMicro ? COLORS.gridMicro : COLORS.gridMajor;
+            ctx.lineWidth = isMicro ? 0.5 : 1;
+            ctx.stroke();
+        }
+
+        function drawObstacles(COLORS) {
+            ctx.fillStyle = COLORS.staticObs;
+            for (let k in state.map.static_obstacles) {
+                const o = state.map.static_obstacles[k];
+                const p = worldToScreen(o.x_m, o.y_m);
+                ctx.fillRect(p.x, p.y, o.w_m * state.view.scale, o.h_m * state.view.scale);
+            }
+            for (let k in state.map.dynamic_obstacles) {
+                const o = state.map.dynamic_obstacles[k];
+                const p = worldToScreen(o.x_m, o.y_m);
+                const w = o.w_m * state.view.scale;
+                const h = o.h_m * state.view.scale;
+                ctx.fillStyle = COLORS.dynamicObs;
+                ctx.fillRect(p.x, p.y, w, h);
+                ctx.strokeStyle = COLORS.dynamicStroke;
+                ctx.lineWidth = 1;
+                ctx.strokeRect(p.x, p.y, w, h);
+            }
+        }
+        
+        // 新增：绘制拖拽预览框
+        function drawPreviewObstacle(rect, COLORS) {
+            const p = worldToScreen(rect.x, rect.y);
+            const w = rect.w * state.view.scale;
+            const h = rect.h * state.view.scale;
+            
+            ctx.fillStyle = COLORS.preview;
+            ctx.fillRect(p.x, p.y, w, h);
+            
+            ctx.strokeStyle = COLORS.previewStroke;
+            ctx.setLineDash([4, 4]);
+            ctx.lineWidth = 2;
+            ctx.strokeRect(p.x, p.y, w, h);
+            ctx.setLineDash([]);
+            
+            // 显示尺寸文字
+            ctx.fillStyle = COLORS.text;
+            ctx.font = 'bold 12px sans-serif';
+            const label = `${rect.w.toFixed(1)}m x ${rect.h.toFixed(1)}m`;
+            ctx.fillText(label, p.x + w/2 - 30, p.y + h/2 + 4);
+        }
+
+        function drawSweptVolume(COLORS) {
+            if (state.pathResult.length < 2) return;
+            const fpR = (state.config.CRANE_FOOTPRINT_M || 5.0) / 2 * state.view.scale;
+            ctx.fillStyle = html.classList.contains('dark') ? 'rgba(96, 165, 250, 0.15)' : 'rgba(59, 130, 246, 0.1)';
+            let lastDrawPixel = null;
+            const minPixelDist = fpR * 0.5; 
+            for (let i = 0; i < state.pathResult.length; i++) {
+                const pt = state.pathResult[i];
+                const p = worldToScreen(pt[0], pt[1]);
+                if (lastDrawPixel) {
+                    const dx = p.x - lastDrawPixel.x, dy = p.y - lastDrawPixel.y;
+                    if (Math.sqrt(dx*dx + dy*dy) < minPixelDist) continue; 
+                }
+                ctx.beginPath(); ctx.arc(p.x, p.y, fpR, 0, Math.PI*2); ctx.fill();
+                lastDrawPixel = p;
+            }
+        }
+
+        function drawPoint(pos, color, label, COLORS) {
+            const p = worldToScreen(pos.x, pos.y);
+            if (document.getElementById('showFootprint').checked) {
+                const fpR = (state.config.CRANE_FOOTPRINT_M || 5.0) / 2 * state.view.scale;
+                ctx.beginPath(); ctx.arc(p.x, p.y, fpR, 0, Math.PI*2);
+                ctx.fillStyle = color + '33'; ctx.fill();
+                ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.setLineDash([4, 4]); ctx.stroke(); ctx.setLineDash([]);
+            }
+            ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI*2);
+            ctx.fillStyle = color; ctx.fill();
+            ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+            ctx.fillStyle = COLORS.text; ctx.font = '12px sans-serif'; ctx.fillText(label, p.x + 10, p.y + 4);
+        }
+
+        function drawPath(COLORS) {
+            if (state.pathResult.length < 2) return;
+            ctx.beginPath();
+            const start = worldToScreen(state.pathResult[0][0], state.pathResult[0][1]);
+            ctx.moveTo(start.x, start.y);
+            for (let i = 1; i < state.pathResult.length; i++) {
+                const pt = state.pathResult[i];
+                const p = worldToScreen(pt[0], pt[1]);
+                ctx.lineTo(p.x, p.y);
+            }
+            ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.lineWidth = 3; ctx.strokeStyle = COLORS.path; ctx.stroke();
+            ctx.fillStyle = '#fff';
+            for (let i = 1; i < state.pathResult.length - 1; i++) {
+                const pt = state.pathResult[i];
+                const p = worldToScreen(pt[0], pt[1]);
+                ctx.beginPath(); ctx.arc(p.x, p.y, 2, 0, Math.PI*2); ctx.fill();
+            }
+        }
+
+        // =================================================================
+        // 5. 画布交互事件 (核心修改：拖动创建 & 吸附)
+        // =================================================================
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const zoom = Math.exp((e.deltaY < 0 ? 1 : -1) * 0.1);
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+            const worldBefore = screenToWorld(mx, my);
+            state.view.scale = Math.max(2, Math.min(200, state.view.scale * zoom));
+            state.view.offsetX = mx - worldBefore.x * state.view.scale;
+            state.view.offsetY = my - worldBefore.y * state.view.scale;
+            requestAnimationFrame(render);
+        });
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+            const worldPos = screenToWorld(mx, my);
+            
+            // 平移模式 或 中键/右键
+            if (state.mode === 'pan' || e.button === 1 || e.button === 2) {
+                state.view.isPanning = true;
+                state.view.lastMouse = { x: e.clientX, y: e.clientY };
+                canvas.style.cursor = 'grabbing';
+                return;
+            }
+
+            // 左键：功能操作
+            if (e.button === 0) {
+                // 如果是添加障碍物模式，开始记录拖拽
+                if (state.mode.startsWith('add_')) {
+                    state.interaction.isDrawing = true;
+                    // 记录吸附后的起始点
+                    const snapX = snapValue(worldPos.x);
+                    const snapY = snapValue(worldPos.y);
+                    state.interaction.startPos = { x: snapX, y: snapY };
+                    state.interaction.currentPos = { x: snapX, y: snapY };
+                    // 初始化一个0大小的矩形
+                    state.interaction.dragRect = { x: snapX, y: snapY, w: 0, h: 0 };
+                }
+            }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            // 处理平移
+            if (state.view.isPanning) {
+                const dx = e.clientX - state.view.lastMouse.x;
+                const dy = e.clientY - state.view.lastMouse.y;
+                state.view.offsetX += dx;
+                state.view.offsetY += dy;
+                state.view.lastMouse = { x: e.clientX, y: e.clientY };
+                requestAnimationFrame(render);
+                return;
+            }
+
+            // 处理拖拽绘制障碍物
+            if (state.interaction.isDrawing) {
+                const rect = canvas.getBoundingClientRect();
+                const worldPos = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                
+                // 实时计算吸附后的终点
+                const snapX = snapValue(worldPos.x);
+                const snapY = snapValue(worldPos.y);
+                state.interaction.currentPos = { x: snapX, y: snapY };
+
+                const start = state.interaction.startPos;
+                
+                // 计算标准化的矩形 (x,y 为左上角, w,h 为正数)
+                const minX = Math.min(start.x, snapX);
+                const minY = Math.min(start.y, snapY);
+                let width = Math.abs(snapX - start.x);
+                let height = Math.abs(snapY - start.y);
+                
+                // 防止出现0大小，给予最小视觉反馈
+                if (width < 0.1) width = 0.1;
+                if (height < 0.1) height = 0.1;
+
+                state.interaction.dragRect = { x: minX, y: minY, w: width, h: height };
+
+                // 同步更新 UI 输入框，让用户看到当前尺寸
+                document.getElementById('obsWidth').value = width.toFixed(1);
+                document.getElementById('obsHeight').value = height.toFixed(1);
+
+                requestAnimationFrame(render);
+            }
+        });
+
+        window.addEventListener('mouseup', (e) => {
+            if (state.view.isPanning) {
+                state.view.isPanning = false;
+                canvas.style.cursor = 'crosshair';
+                return;
+            }
+
+            if (state.interaction.isDrawing) {
+                state.interaction.isDrawing = false;
+                const rect = state.interaction.dragRect;
+                const type = state.mode.split('_')[1];
+                
+                // 判断是"点击"还是"拖拽"
+                // 如果宽高都很小(比如小于0.2m)，认为是点击，使用输入框里的默认值
+                // 否则使用拖拽出来的尺寸
+                let finalW = rect.w;
+                let finalH = rect.h;
+                let finalX = rect.x;
+                let finalY = rect.y;
+                
+                if (rect.w < 0.2 && rect.h < 0.2) {
+                    // 点击模式：使用输入框的值，并以点击点为中心
+                    finalW = parseFloat(document.getElementById('obsWidth').value);
+                    finalH = parseFloat(document.getElementById('obsHeight').value);
+                    const rectClient = canvas.getBoundingClientRect();
+                    const rawPos = screenToWorld(e.clientX - rectClient.left, e.clientY - rectClient.top);
+                    // 依然受到吸附影响
+                    const cx = snapValue(rawPos.x);
+                    const cy = snapValue(rawPos.y);
+                    finalX = cx - finalW/2;
+                    finalY = cy - finalH/2;
+                }
+
+                // 发送请求
+                socket.emit('add_obstacle', {
+                    type: type,
+                    x: finalX,
+                    y: finalY,
+                    w: finalW,
+                    h: finalH
+                });
+
+                // 重置临时状态
+                state.interaction.dragRect = null;
+                requestAnimationFrame(render);
+                return;
+            }
+
+            // 处理其他点击逻辑 (设置起终点, 删除)
+            // 注意：要在 mouseup 处理，且必须是非 drawing 状态
+            if (e.button === 0 && !state.mode.startsWith('add_')) {
+                const rect = canvas.getBoundingClientRect();
+                const worldPos = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+                const snapPos = { x: snapValue(worldPos.x), y: snapValue(worldPos.y) };
+
+                if (state.mode === 'set_start') {
+                    state.startPos = snapPos;
+                    requestAnimationFrame(render);
+                } else if (state.mode === 'set_end') {
+                    state.endPos = snapPos;
+                    requestAnimationFrame(render);
+                } else if (state.mode === 'remove') {
+                    // 删除不需要吸附，需要精确点击
+                    socket.emit('remove_obstacle_near', { x: worldPos.x, y: worldPos.y });
+                }
+            }
+        });
+
+        canvas.addEventListener('contextmenu', e => e.preventDefault());
+        
+        // Toast 通知
+        function showToast(msg, type) {
+            const div = document.createElement('div');
+            const colors = type === 'success' ? 'bg-emerald-500' : 'bg-rose-500';
+            const icon = type === 'success' ? '<i class="ph-bold ph-check"></i>' : '<i class="ph-bold ph-warning"></i>';
+            div.className = `pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg text-white text-sm font-medium transform transition-all duration-300 translate-y-10 opacity-0 ${colors}`;
+            div.innerHTML = `${icon} <span>${msg}</span>`;
+            document.getElementById('toastContainer').appendChild(div);
+            requestAnimationFrame(() => div.classList.remove('translate-y-10', 'opacity-0'));
+            setTimeout(() => { div.classList.add('translate-y-4', 'opacity-0'); setTimeout(() => div.remove(), 300); }, 3000);
+        }
+    </script>
+</body>
+</html>
