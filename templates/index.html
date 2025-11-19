@@ -301,12 +301,27 @@
             state.map.resolution_m = data.resolution_m;
             state.map.static_obstacles = data.static_obstacles;
             state.map.dynamic_obstacles = data.dynamic_obstacles;
+            
+            // [新增] 接收来自后端的 mission_state (同步起点终点)
+            if (data.mission_state) {
+                state.startPos = data.mission_state.start;
+                state.endPos = data.mission_state.end;
+            }
+
             if (data.system_config) {
                 state.config = data.system_config;
                 syncUIWithConfig(state.config);
             }
             requestAnimationFrame(render);
         });
+
+        // [新增] 监听实时坐标同步事件
+        socket.on('sync_mission_coordinates', (data) => {
+            if (data.start) state.startPos = data.start;
+            if (data.end) state.endPos = data.end;
+            requestAnimationFrame(render);
+        });
+
         socket.on('update_path', (path) => {
             state.pathResult = path;
             showToast(`路径规划完成，包含 ${path.length} 个节点`, 'success');
@@ -691,15 +706,22 @@
             // 处理其他点击逻辑 (设置起终点, 删除)
             // 注意：要在 mouseup 处理，且必须是非 drawing 状态
             if (e.button === 0 && !state.mode.startsWith('add_')) {
+                // [关键修复] 确保点击的是 Canvas 元素本身，而不是侧边栏或按钮
+                if (e.target !== canvas) return;
+
                 const rect = canvas.getBoundingClientRect();
                 const worldPos = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
                 const snapPos = { x: snapValue(worldPos.x), y: snapValue(worldPos.y) };
 
                 if (state.mode === 'set_start') {
                     state.startPos = snapPos;
+                    // [新增] 当设置起点时，立刻同步到服务器
+                    socket.emit('sync_mission_coordinates', { start: state.startPos, end: state.endPos });
                     requestAnimationFrame(render);
                 } else if (state.mode === 'set_end') {
                     state.endPos = snapPos;
+                    // [新增] 当设置终点时，立刻同步到服务器
+                    socket.emit('sync_mission_coordinates', { start: state.startPos, end: state.endPos });
                     requestAnimationFrame(render);
                 } else if (state.mode === 'remove') {
                     // 删除不需要吸附，需要精确点击

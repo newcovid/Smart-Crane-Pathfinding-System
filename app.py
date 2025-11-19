@@ -66,6 +66,8 @@ def handle_connect() -> None:
     sid = request.sid
     app.logger.info(f"[Socket] Client Connected: {sid}")
     # 立即发送一次当前状态，实现"首屏直出"
+    # [修改注记] 现在的 get_full_state 包含了 mission_state (起点终点)，
+    # 确保新连接的浏览器能立刻同步到已存在的坐标。
     state = crane_service.get_full_state()
     emit("update_map_state", state)
 
@@ -96,12 +98,43 @@ def handle_update_settings(data: Dict[str, Any]) -> None:
 
 @socketio.on("request_path")
 def handle_request_path(data: Dict[str, Any]) -> None:
-    """路径规划请求"""
+    """
+    路径规划请求。
+    [修改注记] 该操作现在也会触发 mission_state 更新，
+    但我们不在 request_path 里广播 mission，而是广播路径。
+    (如果需要坐标也同步跳变，可以考虑在此处广播一次 sync_mission_coordinates)
+    """
     path, message = crane_service.plan_path(data)
     if path:
         emit("update_path", path)
+        # [可选] 规划成功后，广播一次坐标同步，确保所有人都看到这次规划的起点终点
+        # 避免 A 点击规划，B 屏幕上没有任何反应（除了可能的路径线）
+        socketio.emit("sync_mission_coordinates", crane_service.mission_state)
     else:
         emit("operation_failed", {"message": message})
+
+
+@socketio.on("sync_mission_coordinates")
+def handle_sync_mission_coordinates(data: Dict[str, Any]) -> None:
+    """
+    [新增] 处理坐标同步请求。
+    当用户在前端拖拽起点/终点时触发。
+
+    Expected Data:
+    {
+        "start": {"x": 2.0, "y": 2.0},
+        "end":   {"x": 10.0, "y": 10.0}
+    }
+    """
+    # 1. 更新后端内存状态
+    if "start" in data and "end" in data:
+        crane_service.update_mission_state(data["start"], data["end"])
+
+        # 2. 广播给**其他**所有客户端 (include_self=False 可选，取决于前端实现)
+        # 通常为了保证绝对的一致性，广播给所有客户端（前端收到后更新 UI 位置）
+        # 注意：Eventlet 模式下 broadcast=True 是默认行为，但 explicit 更好
+        socketio.emit("sync_mission_coordinates", data)
+        # app.logger.debug(f"[Sync] 已广播新的任务坐标: {data}")
 
 
 @socketio.on("add_obstacle")

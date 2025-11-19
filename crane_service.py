@@ -20,6 +20,7 @@ class CraneService:
        - 在调整算法参数时，复用现有地图实例，零成本保留数据。
        - 在调整地图尺寸时，自动迁移合法范围内的障碍物。
     4. **异常熔断 (Error Handling)**: 捕获底层算法异常，将其转换为对前端友好的错误消息。
+    5. **任务状态同步 (Mission Sync)**: [新增] 统一管理起点/终点坐标，确保多端协同(Multi-Client)时状态一致。
 
     === 线程安全说明 ===
     本类持有的 map_mgr (WorkshopMapManager) 内部实现了 threading.RLock，
@@ -58,6 +59,14 @@ class CraneService:
         # 显式声明类型，便于 IDE 智能提示
         self.map_mgr: Optional[WorkshopMapManager] = None
         self.planner: Optional[IntelligentCranePlanner] = None
+
+        # [新增] 任务协同状态 (Mission State)
+        # 用于在后端存储当前的起点和终点，解决多浏览器打开时坐标不同步的 Bug。
+        # 默认给一个初始位置，避免前端 undefined
+        self.mission_state = {
+            "start": {"x": 2.0, "y": 2.0},
+            "end": {"x": 10.0, "y": 10.0},
+        }
 
         # 初始化核心组件 (强制首次构建)
         self._init_components(rebuild_map=True)
@@ -269,7 +278,43 @@ class CraneService:
 
         # 3. 补充当前系统配置 (用于前端设置面板的回显)
         state["system_config"] = self.current_config
+
+        # 4. [新增] 补充任务协同状态 (Mission State)
+        # 确保新连接的客户端（浏览器B）能立刻获取到当前存储的起点和终点
+        state["mission_state"] = self.mission_state
+
         return state
+
+    def update_mission_state(self, start: Dict, end: Dict) -> bool:
+        """
+        [新增] 更新当前的任务坐标状态。
+        当用户在任意一个前端拖拽起点/终点时调用。
+
+        Args:
+            start: {'x': float, 'y': float}
+            end:   {'x': float, 'y': float}
+        """
+        try:
+            # 简单的格式校验
+            if "x" not in start or "y" not in start:
+                raise ValueError("Start coordinate missing x or y")
+            if "x" not in end or "y" not in end:
+                raise ValueError("End coordinate missing x or y")
+
+            # 更新内存状态
+            self.mission_state["start"] = {
+                "x": float(start["x"]),
+                "y": float(start["y"]),
+            }
+            self.mission_state["end"] = {"x": float(end["x"]), "y": float(end["y"])}
+
+            self.logger.debug(
+                f"[协同] 坐标同步: Start={self.mission_state['start']}, End={self.mission_state['end']}"
+            )
+            return True
+        except Exception as e:
+            self.logger.error(f"[协同] 坐标同步失败: {e}")
+            return False
 
     def add_obstacle(self, data: Dict[str, Any]) -> Tuple[bool, str]:
         """
@@ -363,6 +408,12 @@ class CraneService:
             - Message: 状态描述
         """
         try:
+            # [新增] 在规划路径的同时，强制更新服务端的 Mission State。
+            # 这样如果用户 A 点击了“开始规划”，用户 B 看到的起终点也会瞬间跳变到 A 设定的位置。
+            # 这是一个良好的 UX 实践，保证"所见即所得"。
+            if "start" in data and "end" in data:
+                self.update_mission_state(data["start"], data["end"])
+
             # 默认高度处理：
             # 起点默认 Z=0.5 (代表吊钩在地面附近，准备起吊)
             # 终点默认 Z=1.0 (代表吊钩在台面高度，准备卸货)
