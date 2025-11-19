@@ -122,8 +122,8 @@ def handle_sync_mission_coordinates(data: Dict[str, Any]) -> None:
 
     Expected Data:
     {
-        "start": {"x": 2.0, "y": 2.0},
-        "end":   {"x": 10.0, "y": 10.0}
+        "start": {"x": 10.0, "y": 10.0},
+        "end":   {"x": 40.0, "y": 30.0}
     }
     """
     # 1. 更新后端内存状态
