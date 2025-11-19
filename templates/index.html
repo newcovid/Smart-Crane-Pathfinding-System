@@ -275,6 +275,9 @@
             }
         };
 
+        // [新增] 全局像素比，用于 HiDPI 适配
+        let dpr = 1;
+
         const themeToggle = document.getElementById('themeToggle');
         const html = document.documentElement;
         const icon = document.getElementById('themeIcon');
@@ -388,12 +391,26 @@
         function setCheck(id, val) { if(val !== undefined) document.getElementById(id).checked = val; }
 
         // =================================================================
-        // 4. Canvas 渲染引擎
+        // 4. Canvas 渲染引擎 (High DPI 适配)
         // =================================================================
         function resizeCanvas() {
             const container = document.getElementById('canvasContainer');
-            canvas.width = container.clientWidth;
-            canvas.height = container.clientHeight;
+            
+            // 1. 获取设备像素比 (Retina 屏通常为 2.0)
+            dpr = window.devicePixelRatio || 1;
+            
+            // 2. 设置 Canvas 的"物理像素"尺寸 (实际内存中的 buffer 大小)
+            canvas.width = Math.round(container.clientWidth * dpr);
+            canvas.height = Math.round(container.clientHeight * dpr);
+            
+            // 3. 设置 Canvas 的"逻辑 CSS"尺寸 (屏幕上显示的尺寸)
+            canvas.style.width = container.clientWidth + 'px';
+            canvas.style.height = container.clientHeight + 'px';
+            
+            // 4. 全局缩放绘图上下文，让后续的绘图操作自动适配高清屏
+            // 这样我们就不用修改 render() 里的逻辑坐标了
+            ctx.scale(dpr, dpr);
+            
             requestAnimationFrame(render);
         }
         window.addEventListener('resize', resizeCanvas);
@@ -431,6 +448,8 @@
                 previewStroke: isDark ? '#fff' : '#000'
             };
 
+            // 清除画布 (使用逻辑坐标全屏清除，因为 scale 已经生效，足够覆盖物理区域)
+            // 或者直接清除一个巨大的区域确保万无一失
             ctx.fillStyle = COLORS.bg;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             
