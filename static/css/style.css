@@ -1,0 +1,63 @@
+/* 滚动条美化 */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: #475569;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+}
+
+/* 玻璃拟态面板 */
+.glass-panel {
+    background: rgba(255, 255, 255, 0.92);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-right: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.dark .glass-panel {
+    background: rgba(30, 41, 59, 0.9);
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* 基础设置 */
+canvas {
+    touch-action: none;
+    outline: none;
+}
+
+html,
+body {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    overflow: hidden;
+}
+
+#app {
+    height: 100%;
+    width: 100%;
+    display: flex;
+}
+
+.custom-scrollbar {
+    scrollbar-width: thin;
+}

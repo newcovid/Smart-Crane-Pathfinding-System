@@ -1,171 +1,163 @@
 import eventlet
 
-# [关键] 执行 Monkey Patch，使标准库 socket 支持协程，这对 Flask-SocketIO 至关重要
 eventlet.monkey_patch()
 
 import logging
+import uuid
 from typing import Dict, Any
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 
-from config import Config
-from crane_service import CraneService
+from core.config import Config
+from core.crane_service import CraneService
+
 
 # =========================================================================
-# 1. 应用初始化与配置 (App Setup)
+# 1. 自定义日志处理器 (Log Streaming)
 # =========================================================================
-print(">>> [Boot] 正在启动 Flask 应用框架...")
+class SocketIOLogHandler(logging.Handler):
+    """将后端日志实时推送到 WebSocket 客户端"""
 
+    def emit(self, record):
+        try:
+            log_entry = self.format(record)
+            # 使用 socketio.emit 广播日志，namespace='/'
+            # 注意: 这里需要在一个应用上下文中或者是广播模式
+            if "socketio" in globals():
+                socketio.emit(
+                    "server_log",
+                    {
+                        "level": record.levelname,
+                        "msg": log_entry,
+                        "time": record.created,
+                    },
+                )
+        except Exception:
+            self.handleError(record)
+
+
+# =========================================================================
+# 2. 应用初始化
+# =========================================================================
 app = Flask(__name__, template_folder="templates")
 app.config.from_object(Config)
 
-# 配置日志格式
-# 工业级日志通常包含：时间戳、日志级别、模块名、具体消息
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-app.logger.setLevel(logging.INFO)
-
 # 初始化 SocketIO
-# async_mode="eventlet" 是生产环境的最佳实践，性能远高于默认的 threading 模式
 socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
 
+# 配置日志系统
+# 清除默认 handler，避免重复
+logging.getLogger().handlers = []
+
+# 格式化器
+formatter = logging.Formatter(
+    "%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%H:%M:%S"
+)
+
+# 1. 控制台输出
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(formatter)
+console_handler.setLevel(logging.INFO)
+
+# 2. Web 端输出
+socket_handler = SocketIOLogHandler()
+socket_handler.setFormatter(formatter)
+socket_handler.setLevel(logging.INFO)
+
+# 挂载到 Root Logger
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.addHandler(console_handler)
+root_logger.addHandler(socket_handler)
+
+logger = app.logger
+logger.info(">>> [System] 日志系统初始化完成 (Console + Web)")
+
 # =========================================================================
-# 2. 依赖注入 (Dependency Injection)
+# 3. 业务服务单例
 # =========================================================================
-# 实例化核心业务服务 CraneService (单例模式)
-# 它将持有整个应用的业务状态 (地图、规划器等)
-crane_service = CraneService(config=Config, logger=app.logger)
+crane_service = CraneService(config=Config, logger=logger)
 
 
 # =========================================================================
-# 3. HTTP 路由控制器 (Controllers)
+# 4. 路由与事件
 # =========================================================================
 @app.route("/")
-def index() -> str:
-    """前端入口页面"""
-    return render_template("index.html")
-
-
-# =========================================================================
-# 4. WebSocket 事件处理器 (SocketIO Handlers)
-# =========================================================================
-
-
-def broadcast_state_update() -> None:
-    """[工具函数] 向所有连接的客户端广播最新的地图状态"""
-    state = crane_service.get_full_state()
-    socketio.emit("update_map_state", state)
+def index():
+    return render_template("main.html")
 
 
 @socketio.on("connect")
-def handle_connect() -> None:
-    """客户端连接事件"""
-    sid = request.sid
-    app.logger.info(f"[Socket] Client Connected: {sid}")
-    # 立即发送一次当前状态，实现"首屏直出"
-    # [修改注记] 现在的 get_full_state 包含了 mission_state (起点终点)，
-    # 确保新连接的浏览器能立刻同步到已存在的坐标。
+def handle_connect():
+    logger.info(f"[Socket] Client connected: {request.sid}")
     state = crane_service.get_full_state()
     emit("update_map_state", state)
 
-
-@socketio.on("disconnect")
-def handle_disconnect() -> None:
-    """客户端断开事件"""
-    pass  # 实际业务中可能需要清理用户特定的资源，此处暂不需要
+    if crane_service.last_calculated_path:
+        emit("update_path", crane_service.last_calculated_path)
+        if crane_service.last_stats:
+            emit("planning_stats", crane_service.last_stats)
 
 
 @socketio.on("update_settings")
-def handle_update_settings(data: Dict[str, Any]) -> None:
-    """
-    [核心交互] 前端请求更新系统配置 (车间尺寸、算法参数等)
-    """
-    sid = request.sid
-    app.logger.info(f"[Setting] 收到配置更新请求 (From {sid})")
-
-    success, message = crane_service.update_configuration(data)
-
+def handle_update_settings(data):
+    logger.info(f"[Config] Update request: {data}")
+    success, msg = crane_service.update_configuration(data)
     if success:
-        emit("operation_success", {"message": message})
-        # 配置改变可能导致地图重建，必须广播给所有客户端以刷新视图
-        broadcast_state_update()
+        socketio.emit("update_map_state", crane_service.get_full_state())
+        emit("operation_success", {"message": "Settings updated"})
     else:
-        emit("operation_failed", {"message": message})
+        logger.error(f"[Config] Update failed: {msg}")
+        emit("operation_failed", {"message": msg})
 
 
 @socketio.on("request_path")
-def handle_request_path(data: Dict[str, Any]) -> None:
-    """
-    路径规划请求。
-    [修改注记] 该操作现在也会触发 mission_state 更新，
-    但我们不在 request_path 里广播 mission，而是广播路径。
-    (如果需要坐标也同步跳变，可以考虑在此处广播一次 sync_mission_coordinates)
-    """
-    path, message = crane_service.plan_path(data)
+def handle_request_path(data):
+    if "start" in data:
+        crane_service.update_mission_state(data)
+        socketio.emit("sync_mission_coordinates", data, include_self=False)
+
+    logger.info("[Plan] Request received...")
+    path, stats, msg = crane_service.plan_path()
+
     if path:
         emit("update_path", path)
-        # [可选] 规划成功后，广播一次坐标同步，确保所有人都看到这次规划的起点终点
-        # 避免 A 点击规划，B 屏幕上没有任何反应（除了可能的路径线）
-        socketio.emit("sync_mission_coordinates", crane_service.mission_state)
+        emit("planning_stats", stats)
+        logger.info(f"[Plan] Success. Nodes: {len(path)}")
     else:
-        emit("operation_failed", {"message": message})
-
-
-@socketio.on("sync_mission_coordinates")
-def handle_sync_mission_coordinates(data: Dict[str, Any]) -> None:
-    """
-    [新增] 处理坐标同步请求。
-    当用户在前端拖拽起点/终点时触发。
-
-    Expected Data:
-    {
-        "start": {"x": 10.0, "y": 10.0},
-        "end":   {"x": 40.0, "y": 30.0}
-    }
-    """
-    # 1. 更新后端内存状态
-    if "start" in data and "end" in data:
-        crane_service.update_mission_state(data["start"], data["end"])
-
-        # 2. 广播给**其他**所有客户端 (include_self=False 可选，取决于前端实现)
-        # 通常为了保证绝对的一致性，广播给所有客户端（前端收到后更新 UI 位置）
-        # 注意：Eventlet 模式下 broadcast=True 是默认行为，但 explicit 更好
-        socketio.emit("sync_mission_coordinates", data)
-        # app.logger.debug(f"[Sync] 已广播新的任务坐标: {data}")
+        emit("update_path", [])
+        emit("planning_stats", stats)
+        logger.warning(f"[Plan] Failed: {msg}")
+        emit("operation_failed", {"message": msg})
 
 
 @socketio.on("add_obstacle")
-def handle_add_obstacle(data: Dict[str, Any]) -> None:
-    """添加障碍物请求"""
-    success, message = crane_service.add_obstacle(data)
+def handle_add_obstacle(data):
+    # 增加详细日志以调试障碍物添加流程
+    logger.info(f"[Map] Adding obstacle request: {data}")
+    success, msg = crane_service.add_obstacle(data)
     if success:
-        # 只有成功才广播，避免无效刷新
-        broadcast_state_update()
+        socketio.emit("update_map_state", crane_service.get_full_state())
+        logger.info("[Map] Obstacle added & Map broadcasted")
     else:
-        emit("operation_failed", {"message": message})
+        logger.error(f"[Map] Add failed: {msg}")
+        emit("operation_failed", {"message": msg})
 
 
 @socketio.on("remove_obstacle_near")
-def handle_remove_obstacle_near(data: Dict[str, Any]) -> None:
-    """移除障碍物请求"""
-    success, message = crane_service.remove_obstacle_near(data)
+def handle_remove_obstacle(data):
+    success, msg = crane_service.remove_obstacle_near(data)
     if success:
-        broadcast_state_update()
+        socketio.emit("update_map_state", crane_service.get_full_state())
     else:
-        emit("operation_failed", {"message": message})
+        emit("operation_failed", {"message": "No obstacle found here"})
 
 
-# =========================================================================
-# 5. 启动入口
-# =========================================================================
+@socketio.on("sync_mission_coordinates")
+def handle_sync_mission(data):
+    crane_service.update_mission_state(data)
+    socketio.emit("sync_mission_coordinates", data, include_self=False)
+
+
 if __name__ == "__main__":
-    host = "127.0.0.1"
-    port = 5000
-
-    app.logger.info(f"服务启动中... 访问 http://{host}:{port}")
-
-    # 使用 socketio.run 替代 app.run
-    socketio.run(app, host=host, port=port, debug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
