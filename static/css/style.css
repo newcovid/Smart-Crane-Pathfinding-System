@@ -1,63 +1,138 @@
-/* 滚动条美化 */
-::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-}
-
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
-    border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: #94a3b8;
-}
-
-.dark ::-webkit-scrollbar-thumb {
-    background: #475569;
-}
-
-.dark ::-webkit-scrollbar-thumb:hover {
-    background: #64748b;
-}
-
-/* 玻璃拟态面板 */
-.glass-panel {
-    background: rgba(255, 255, 255, 0.92);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    border-right: 1px solid rgba(0, 0, 0, 0.05);
-}
-
-.dark .glass-panel {
-    background: rgba(30, 41, 59, 0.9);
-    border-right: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-/* 基础设置 */
-canvas {
-    touch-action: none;
-    outline: none;
-}
-
+/* --- 基础重置 --- */
 html,
 body {
     height: 100%;
     width: 100%;
     margin: 0;
+    padding: 0;
     overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    user-select: none;
+    /* 减少拖拽时的文本选中干扰 */
+}
+
+[v-cloak] {
+    display: none !important;
 }
 
 #app {
     height: 100%;
     width: 100%;
     display: flex;
+    flex-direction: column;
 }
 
+/* --- 拖拽分割条 (Resizers) --- */
+.resizer-vertical {
+    width: 4px;
+    cursor: col-resize;
+    background-color: transparent;
+    transition: background-color 0.2s;
+    z-index: 40;
+    flex-shrink: 0;
+    margin-left: -2px;
+    /* 视觉居中 */
+    margin-right: -2px;
+    position: relative;
+}
+
+.resizer-vertical:hover,
+.resizer-vertical.resizing {
+    background-color: #3b82f6;
+    /* primary color */
+}
+
+.resizer-horizontal {
+    height: 4px;
+    cursor: row-resize;
+    background-color: transparent;
+    transition: background-color 0.2s;
+    z-index: 40;
+    flex-shrink: 0;
+    margin-top: -2px;
+    margin-bottom: -2px;
+    position: relative;
+}
+
+.resizer-horizontal:hover,
+.resizer-horizontal.resizing {
+    background-color: #3b82f6;
+}
+
+/* 增加一个透明的覆盖层在拖拽时，防止iframe(如果有)捕获事件 */
+.resizing-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 9999;
+    cursor: grabbing;
+}
+
+/* --- 自定义滚动条 --- */
 .custom-scrollbar {
     scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+}
+
+.dark .custom-scrollbar {
+    scrollbar-color: #475569 transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 20px;
+    border: 1px solid transparent;
+    background-clip: content-box;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: #94a3b8;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background-color: #475569;
+}
+
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background-color: #64748b;
+}
+
+/* --- 其他 --- */
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input[type=number] {
+    -moz-appearance: textfield;
+}
+
+.glass-panel {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.5);
+}
+
+.dark .glass-panel {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+canvas {
+    touch-action: none;
+    outline: none;
 }

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-CN" class="dark">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>智能起重机控制台 Pro V10.6 (Ceiling Fix)</title>
+    <title>智能起重机控制台 Pro</title>
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="/static/css/style.css">
@@ -18,9 +18,9 @@
             theme: { 
                 extend: { 
                     colors: { primary: '#3b82f6', darkbg: '#0f172a', lightbg: '#f8fafc', success: '#10b981', danger: '#f43f5e' },
-                    fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
-                    animation: { 'fadeIn': 'fadeIn 0.2s ease-out forwards' },
-                    keyframes: { fadeIn: { '0%': { opacity: '0', transform: 'translateY(-5px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } } }
+                    fontFamily: { sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+                    animation: { 'fadeIn': 'fadeIn 0.3s ease-out forwards' },
+                    keyframes: { fadeIn: { '0%': { opacity: '0', transform: 'translateY(-10px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } } }
                 } 
             } 
         }
@@ -35,134 +35,67 @@
         }
     </script>
 </head>
-<body class="bg-lightbg dark:bg-darkbg text-slate-800 dark:text-slate-200 font-sans transition-colors duration-300 antialiased overflow-hidden">
+<body class="bg-slate-100 dark:bg-[#0b1120] text-slate-800 dark:text-slate-200 font-sans transition-colors duration-300 antialiased overflow-hidden selection:bg-primary/30">
     
     {% raw %}
     <div id="app" class="w-full h-full flex flex-col" v-cloak>
-        <!-- Top Bar -->
-        <header class="h-12 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-4 shrink-0 z-20 relative">
+        
+        <!-- 遮罩层 (拖拽时激活，防止 iframe 吃事件) -->
+        <div v-if="ui.resizingSidebar || ui.resizingLog" class="resizing-overlay"></div>
+
+        <!-- 1. 顶栏 -->
+        <header class="h-14 bg-white dark:bg-[#161e2e] border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-5 shrink-0 z-30 relative shadow-sm transition-colors duration-300">
             <div class="flex items-center gap-3">
-                <div class="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center text-primary">
-                    <i class="ph-bold ph-crane text-xl"></i>
+                <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+                    <i class="ph-bold ph-crane-tower text-lg"></i>
                 </div>
-                <div>
-                    <h1 class="font-bold text-sm tracking-wide">智能起重机 <span class="text-primary">Pro</span></h1>
+                <div class="flex flex-col">
+                    <h1 class="font-bold text-sm tracking-wide text-slate-900 dark:text-white leading-none">CRANE <span class="text-primary">AI</span></h1>
+                    <span class="text-[9px] text-slate-400 font-medium tracking-widest mt-0.5 uppercase">Trajectory Planner V15.0</span>
                 </div>
             </div>
             
             <div class="flex items-center gap-4">
-                <div class="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
-                   <span class="flex items-center gap-1">
-                        <span class="w-1.5 h-1.5 rounded-full" :class="connection.connected ? 'bg-success' : 'bg-danger'"></span>
+                <!-- Status -->
+                <div class="flex items-center gap-2.5 text-[10px] font-mono bg-slate-50 dark:bg-slate-800/50 px-3 py-1.5 rounded border border-slate-200 dark:border-slate-700">
+                   <span class="flex items-center gap-1.5 text-slate-600 dark:text-slate-300 font-bold">
+                        <span class="relative flex h-2 w-2">
+                          <span v-if="connection.connected" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                          <span class="relative inline-flex rounded-full h-2 w-2" :class="connection.connected ? 'bg-green-500' : 'bg-red-500'"></span>
+                        </span>
                         {{ connection.statusText }}
                     </span>
-                    <span>|</span>
-                    <span>{{ connection.latency }}ms</span>
+                    <span class="w-px h-3 bg-slate-300 dark:bg-slate-600"></span>
+                    <span class="text-slate-400">{{ connection.latency }}ms</span>
                 </div>
 
-                <div class="bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg flex gap-1">
-                    <button @click="ui.viewMode = '2d'" :class="{'bg-white dark:bg-slate-700 shadow-sm text-primary': ui.viewMode === '2d', 'text-slate-400': ui.viewMode !== '2d'}" class="px-3 py-1 rounded text-xs font-bold transition-all">二维</button>
-                    <button @click="ui.viewMode = '3d'" :class="{'bg-white dark:bg-slate-700 shadow-sm text-primary': ui.viewMode === '3d', 'text-slate-400': ui.viewMode !== '3d'}" class="px-3 py-1 rounded text-xs font-bold transition-all">三维</button>
+                <!-- View Mode -->
+                <div class="bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg flex gap-0.5">
+                    <button @click="switchView('2d')" :class="ui.viewMode === '2d' ? 'bg-white dark:bg-[#1f2937] shadow-sm text-primary' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'" class="px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5">
+                        <i class="ph-bold ph-square"></i> 2D
+                    </button>
+                    <button @click="switchView('3d')" :class="ui.viewMode === '3d' ? 'bg-white dark:bg-[#1f2937] shadow-sm text-primary' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'" class="px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5">
+                        <i class="ph-bold ph-cube"></i> 3D
+                    </button>
                 </div>
                 
-                <button @click="toggleTheme" class="w-8 h-8 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500 transition-colors">
-                    <i :class="isDark ? 'ph-bold ph-sun' : 'ph-bold ph-moon'"></i>
+                <!-- Theme -->
+                <button @click="toggleTheme" class="w-8 h-8 rounded-lg bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center text-slate-500 transition-all border border-slate-200 dark:border-slate-700">
+                    <i :class="isDark ? 'ph-bold ph-moon' : 'ph-bold ph-sun'" class="text-lg text-amber-500 dark:text-slate-400"></i>
                 </button>
             </div>
         </header>
 
-        <!-- Main Content -->
+        <!-- 2. 主体内容区 -->
         <div class="flex-1 flex overflow-hidden relative">
             
-            <!-- Sidebar (Settings) -->
-            <aside class="w-80 bg-white/80 dark:bg-slate-900/90 backdrop-blur-xl border-r border-slate-200 dark:border-slate-800 flex flex-col transition-all duration-300 z-10">
-                <div class="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-6">
-                    
-                    <!-- 1. Map Config -->
-                    <section>
-                        <h3 class="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">地图环境</h3>
-                        <div class="grid grid-cols-2 gap-3 mb-3">
-                            <number-input label="长度 (m)" v-model="settings.MAP_LENGTH_M" unit="m"></number-input>
-                            <number-input label="宽度 (m)" v-model="settings.MAP_WIDTH_M" unit="m"></number-input>
-                            <number-input label="高度 (m)" v-model="settings.MAP_HEIGHT_M" unit="m"></number-input>
-                            <number-input label="分辨率 (m)" v-model="settings.MAP_RESOLUTION_M" unit="m" step="0.1"></number-input>
-                        </div>
-                        <button @click="applySettings" class="w-full py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-xs font-bold rounded transition-colors border border-slate-200 dark:border-slate-700 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
-                            重置地图尺寸
-                        </button>
-                    </section>
-
-                    <!-- 2. Crane Physics -->
-                    <section>
-                        <h3 class="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">起重机物理参数</h3>
-                        <div class="space-y-3">
-                            <div class="space-y-1">
-                                <label class="text-[10px] text-slate-500 font-medium ml-1">形状</label>
-                                <select v-model="settings.CRANE_FOOTPRINT_SHAPE" class="w-full bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-md px-2 py-1.5 text-xs text-slate-700 dark:text-slate-200 focus:ring-1 focus:ring-primary focus:outline-none">
-                                    <option value="box">矩形 (Box)</option>
-                                    <option value="circle">圆形 (Circle)</option>
-                                </select>
-                            </div>
-                            <div class="grid grid-cols-2 gap-3">
-                                <number-input label="宽度/直径 (m)" v-model="settings.CRANE_FOOTPRINT_WIDTH" unit="m"></number-input>
-                                <number-input label="长度 (m)" v-model="settings.CRANE_FOOTPRINT_LENGTH" unit="m" v-if="settings.CRANE_FOOTPRINT_SHAPE === 'box'"></number-input>
-                                <number-input label="高度 (m)" v-model="settings.CRANE_FOOTPRINT_HEIGHT" unit="m"></number-input>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- 3. Safety Strategy -->
-                    <section>
-                        <h3 class="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">安全策略</h3>
-                        <div class="space-y-3">
-                            <!-- 垂直安全余量 (全局) -->
-                            <number-input label="垂直安全余量 (m)" v-model="settings.CRANE_Z_SAFETY_MARGIN" unit="m" step="0.1" title="起重机底部距离障碍物顶部的最小安全距离"></number-input>
-                            
-                            <!-- 障碍物模式 (全局) -->
-                            <toggle-switch label="无限高障碍模式" v-model="settings.OBSTACLE_INFINITE_HEIGHT"></toggle-switch>
-
-                            <!-- 2.5D 巡航 -->
-                            <div class="pt-2 border-t border-slate-100 dark:border-slate-800">
-                                <toggle-switch label="启用定高巡航 (2.5D)" v-model="settings.ENABLE_FIXED_HEIGHT_CRUISE"></toggle-switch>
-                                <div v-if="settings.ENABLE_FIXED_HEIGHT_CRUISE" class="pl-2 border-l-2 border-slate-200 dark:border-slate-700 mt-2">
-                                    <number-input label="巡航高度 (m)" v-model="settings.CRANE_SAFE_TRAVEL_Z_M" unit="m"></number-input>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- 4. Algorithm Tuning -->
-                    <section>
-                        <h3 class="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">算法微调</h3>
-                        <div class="space-y-3">
-                             <div class="flex p-1 bg-slate-100 dark:bg-slate-800 rounded">
-                                <button class="flex-1 py-1 text-[10px] font-bold rounded" :class="settings.PLANNER_ALGORITHM==='astar'?'bg-white dark:bg-slate-600 shadow text-primary':'text-slate-500'" @click="settings.PLANNER_ALGORITHM='astar'">A* 全量</button>
-                                <button class="flex-1 py-1 text-[10px] font-bold rounded" :class="settings.PLANNER_ALGORITHM==='dslite'?'bg-white dark:bg-slate-600 shadow text-primary':'text-slate-500'" @click="settings.PLANNER_ALGORITHM='dslite'">D* 增量</button>
-                            </div>
-                            <toggle-switch label="3D Octile 距离 (更贴合网格)" v-model="settings.USE_3D_OCTILE"></toggle-switch>
-                            <div class="flex items-center justify-between px-1">
-                                <span class="text-[10px] text-slate-500">启发式权重</span>
-                                <input type="number" v-model="settings.HEURISTIC_WEIGHT" step="0.1" class="w-12 text-right bg-transparent text-xs font-mono border-b border-slate-300 dark:border-slate-600 focus:outline-none">
-                            </div>
-                            
-                            <div class="h-px bg-slate-100 dark:bg-slate-800 my-2"></div>
-                            
-                            <toggle-switch label="L1.5 捷径优化 (Greedy)" v-model="settings.ENABLE_SHORTCUT_OPTIMIZATION"></toggle-switch>
-                            
-                            <div class="space-y-2">
-                                <toggle-switch label="L1.5 贝塞尔平滑" v-model="settings.ENABLE_BEZIER_SMOOTHING"></toggle-switch>
-                                <div v-if="settings.ENABLE_BEZIER_SMOOTHING" class="grid grid-cols-2 gap-2 pl-2 border-l-2 border-slate-200 dark:border-slate-700">
-                                    <number-input label="平滑度 (0-0.5)" v-model="settings.BEZIER_SMOOTHNESS" step="0.05"></number-input>
-                                    <number-input label="细分段数" v-model="settings.BEZIER_SEGMENTS" step="1"></number-input>
-                                </div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <!-- Tools -->
-                    <section>
-                        <h3 class="text-[10px] font-bold text-slate-400 uppercase mb-3 tracking-wider">工具箱</h3>
-                        <div class="grid grid-cols-3 gap-2">
+            <!-- 2.1 侧边栏 (Sidebar) - 动态宽度 -->
+            <aside class="bg-slate-100 dark:bg-[#111827] border-r border-slate-200 dark:border-slate-800 flex flex-col z-20 shadow-2xl shadow-black/5 transition-colors duration-300"
+                   :style="{ width: ui.sidebarWidth + 'px' }">
+                
+                <div class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
+                    <section-group title="交互工具箱" icon="ph-toolbox" :default-open="true">
+                        <div class="grid grid-cols-3 gap-2 mb-2">
                             <tool-btn icon="ph-hand-grabbing" label="浏览" value="view" v-model="interaction.mode"></tool-btn>
                             <tool-btn icon="ph-flag-checkered" label="设起点" value="set_start" color="text-success" v-model="interaction.mode"></tool-btn>
                             <tool-btn icon="ph-flag" label="设终点" value="set_end" color="text-danger" v-model="interaction.mode"></tool-btn>
@@ -170,60 +103,140 @@
                             <tool-btn icon="ph-truck" label="动态物" value="add_dynamic" color="text-orange-500" v-model="interaction.mode"></tool-btn>
                             <tool-btn icon="ph-eraser" label="移除" value="remove" color="text-red-500" v-model="interaction.mode"></tool-btn>
                         </div>
-                        <div v-if="interaction.mode.startsWith('add_')" class="mt-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-100 dark:border-blue-800">
-                            <number-input label="物体高度 (m)" v-model="interaction.addHeight" unit="m"></number-input>
+                        <div v-if="interaction.mode.startsWith('add_')" class="p-3 bg-blue-50 dark:bg-blue-500/10 rounded-lg border border-blue-200 dark:border-blue-500/20 animate-fadeIn">
+                            <div class="text-[10px] font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-1">
+                                <i class="ph-bold ph-info"></i> 添加物体属性
+                            </div>
+                            <number-input label="物体高度 (Z)" v-model="interaction.addHeight" unit="m"></number-input>
                         </div>
-                    </section>
-                    
-                    <div class="pt-2 pb-6">
-                        <button @click="requestPlan" class="w-full py-3 bg-primary hover:bg-blue-600 text-white font-bold rounded-lg shadow-lg shadow-blue-500/20 transition-all flex items-center justify-center gap-2">
-                            <i class="ph-bold ph-play"></i>
-                            执行路径规划
+                        <div class="p-3 bg-slate-50 dark:bg-slate-900/50 rounded-lg border border-slate-200 dark:border-slate-700">
+                             <div class="text-[10px] font-bold text-slate-500 dark:text-slate-400 mb-2 flex items-center gap-1">
+                                <i class="ph-bold ph-arrows-vertical"></i> 起降高度设置
+                             </div>
+                             <div class="space-y-2">
+                                 <number-input label="起点高度 (Z)" v-model="missionState.start.z" unit="m" :step="0.5"></number-input>
+                                 <number-input label="终点高度 (Z)" v-model="missionState.end.z" unit="m" :step="0.5"></number-input>
+                             </div>
+                        </div>
+                        <div class="pt-1">
+                            <toggle-switch label="自动对齐网格 (Snap)" v-model="config.snapToGrid" subtext="拖拽时吸附到最近格点"></toggle-switch>
+                        </div>
+                    </section-group>
+
+                    <section-group title="场地尺寸配置" icon="ph-ruler">
+                        <number-input label="场地长度 (Y)" v-model="settings.MAP_LENGTH_M" :step="5" unit="m"></number-input>
+                        <number-input label="场地宽度 (X)" v-model="settings.MAP_WIDTH_M" :step="5" unit="m"></number-input>
+                        <number-input label="场地高度 (Z)" v-model="settings.MAP_HEIGHT_M" :step="1" unit="m"></number-input>
+                        <div class="h-px bg-slate-200 dark:bg-slate-700/50 my-2"></div>
+                        <number-input label="栅格分辨率" v-model="settings.MAP_RESOLUTION_M" :step="0.1" :min="0.1" unit="m"></number-input>
+                        <button @click="applySettings" class="w-full mt-3 py-2 text-[11px] font-bold uppercase tracking-wide bg-slate-50 hover:bg-white dark:bg-slate-700 dark:hover:bg-slate-600 border border-slate-200 dark:border-slate-600 rounded text-slate-600 dark:text-slate-300 hover:text-primary hover:border-primary transition-all">
+                            应用尺寸变更
                         </button>
-                        <button @click="applySettings" class="w-full mt-2 py-2 text-xs text-slate-400 hover:text-primary transition-colors">
-                            仅应用配置 (Ctrl+S)
+                    </section-group>
+
+                    <section-group title="物理与安全策略" icon="ph-shield-check">
+                        <select-input label="吊具形状" v-model="settings.CRANE_FOOTPRINT_SHAPE" :options="[{label: '矩形 (Box)', value: 'box'}, {label: '圆形 (Circle)', value: 'circle'}]"></select-input>
+                        <div class="space-y-2 pt-1">
+                            <number-input label="宽度/直径" v-model="settings.CRANE_FOOTPRINT_WIDTH" unit="m" :step="0.5"></number-input>
+                            <number-input v-if="settings.CRANE_FOOTPRINT_SHAPE === 'box'" label="长度" v-model="settings.CRANE_FOOTPRINT_LENGTH" unit="m" :step="0.5"></number-input>
+                            <number-input label="自身高度" v-model="settings.CRANE_FOOTPRINT_HEIGHT" unit="m" :step="0.5"></number-input>
+                        </div>
+                        <div class="h-px bg-slate-200 dark:bg-slate-700/50 my-2"></div>
+                        <number-input label="垂直安全余量" v-model="settings.CRANE_Z_SAFETY_MARGIN" unit="m" :step="0.1"></number-input>
+                        <toggle-switch label="无限高障碍模式" v-model="settings.OBSTACLE_INFINITE_HEIGHT" subtext="忽略障碍物高度，强制视为通天塔"></toggle-switch>
+                        <div class="bg-blue-50/50 dark:bg-blue-900/10 rounded-lg p-2 border border-blue-100 dark:border-blue-800/30 mt-1">
+                            <toggle-switch label="定高巡航模式 (2.5D)" v-model="settings.ENABLE_FIXED_HEIGHT_CRUISE" subtext="直起 -> 平移 -> 直落"></toggle-switch>
+                            <div v-if="settings.ENABLE_FIXED_HEIGHT_CRUISE" class="mt-2 pt-2 border-t border-blue-200/30 dark:border-blue-700/30">
+                                <number-input label="巡航高度" v-model="settings.CRANE_SAFE_TRAVEL_Z_M" unit="m"></number-input>
+                            </div>
+                        </div>
+                    </section-group>
+
+                    <section-group title="路径算法核心" icon="ph-cpu">
+                        <select-input label="规划核心" v-model="settings.PLANNER_ALGORITHM" :options="[{label: 'A* (全局最优)', value: 'astar'}, {label: 'D* Lite (动态增量)', value: 'dslite'}]"></select-input>
+                        <toggle-switch label="3D Octile 距离" v-model="settings.USE_3D_OCTILE" subtext="启用对角线移动代价 (更精确)"></toggle-switch>
+                        <div class="pt-1">
+                            <number-input label="启发式权重 (W)" v-model="settings.HEURISTIC_WEIGHT" :step="0.1" :min="1.0" :max="10.0"></number-input>
+                        </div>
+                    </section-group>
+
+                    <section-group title="轨迹后处理" icon="ph-Bezier-curve">
+                        <toggle-switch label="捷径优化 (Greedy)" v-model="settings.ENABLE_SHORTCUT_OPTIMIZATION" subtext="消除网格锯齿，拉直路径"></toggle-switch>
+                        <div class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700/50">
+                            <toggle-switch label="贝塞尔平滑 (Bezier)" v-model="settings.ENABLE_BEZIER_SMOOTHING"></toggle-switch>
+                            <div v-if="settings.ENABLE_BEZIER_SMOOTHING" class="mt-2 space-y-2 pl-2 border-l-2 border-slate-200 dark:border-slate-700 ml-1">
+                                <number-input label="平滑度 (0-0.5)" v-model="settings.BEZIER_SMOOTHNESS" :step="0.05" :min="0" :max="0.5"></number-input>
+                                <number-input label="插值密度" v-model="settings.BEZIER_SEGMENTS" :step="1" :min="2"></number-input>
+                            </div>
+                        </div>
+                    </section-group>
+
+                    <section-group title="视觉显示设置" icon="ph-eye">
+                        <div class="space-y-2">
+                            <div class="text-[11px] text-slate-600 dark:text-slate-400 font-medium">安全包络显示</div>
+                            <div class="flex bg-slate-100 dark:bg-slate-900/50 p-1 rounded">
+                                <button v-for="m in ['none', 'footprint', 'inflation']" 
+                                        :key="m"
+                                        @click="visuals.safetyMode = m"
+                                        class="flex-1 py-1.5 text-[10px] font-bold rounded capitalize transition-all"
+                                        :class="visuals.safetyMode === m ? 'bg-white dark:bg-slate-700 shadow-sm text-slate-900 dark:text-white' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'">
+                                    {{ m === 'none' ? '隐藏' : (m === 'footprint' ? '足迹' : '膨胀层') }}
+                                </button>
+                            </div>
+                            <p class="text-[9px] text-slate-400 leading-tight">* 膨胀层显示实际的算法禁行区。</p>
+                        </div>
+                    </section-group>
+                </div>
+
+                <div class="p-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-[#161e2e] z-30 transition-colors duration-300">
+                    <button @click="requestPlan" class="w-full py-3 bg-primary hover:bg-blue-600 active:scale-[0.98] text-white font-bold rounded-lg shadow-lg shadow-blue-500/30 transition-all flex items-center justify-center gap-2 group">
+                        <i class="ph-bold ph-play text-lg group-hover:fill-current"></i>
+                        <span class="text-sm">开始规划路径</span>
+                    </button>
+                    <div class="mt-2 flex justify-center">
+                        <button @click="applySettings" class="text-[10px] font-medium text-slate-400 hover:text-primary transition-colors flex items-center gap-1.5 px-2 py-1 rounded hover:bg-slate-50 dark:hover:bg-slate-800">
+                            <i class="ph-bold ph-floppy-disk"></i> 仅保存配置 (Ctrl+S)
                         </button>
                     </div>
                 </div>
             </aside>
 
-            <!-- Canvas Container -->
-            <main class="flex-1 relative bg-slate-100 dark:bg-[#0f172a] overflow-hidden flex flex-col">
+            <!-- 垂直分割条 -->
+            <div class="resizer-vertical" @mousedown="startResizeSidebar" :class="{ 'resizing': ui.resizingSidebar }"></div>
+
+            <!-- 2.2 画布与日志区 -->
+            <main class="flex-1 relative bg-slate-200 dark:bg-[#0b1120] overflow-hidden flex flex-col shadow-[inset_4px_0_15px_rgba(0,0,0,0.05)] transition-colors duration-300">
                 
-                <!-- Canvas Area -->
+                <!-- Canvas -->
                 <div class="flex-1 relative overflow-hidden">
                     <canvas-2d v-if="ui.viewMode === '2d'" :map="mapState" :interaction="interaction" :path="pathData" :mission="missionState" :settings="settings" :visuals="visuals" :is-dark="isDark" :active="ui.viewMode === '2d'" @map-click="handleMapClick" @map-drag="handleMapDrag"></canvas-2d>
-                    <canvas-3d v-if="ui.viewMode === '3d'" :map="mapState" :path="pathData" :mission="missionState" :active="ui.viewMode === '3d'"></canvas-3d>
+                    <canvas-3d v-if="ui.viewMode === '3d'" :map="mapState" :path="pathData" :mission="missionState" :visuals="visuals" :is-dark="isDark" :active="ui.viewMode === '3d'"></canvas-3d>
                     
-                    <!-- HUD -->
-                    <div v-if="lastStats" class="absolute top-4 right-4 pointer-events-none">
-                        <div class="glass-panel p-3 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 w-48">
-                            <div class="flex justify-between text-xs font-bold mb-1">
-                                <span class="text-slate-500">耗时</span>
-                                <span class="text-primary">{{ lastStats.pipeline_total_ms.toFixed(1) }} ms</span>
-                            </div>
-                             <div class="flex justify-between text-xs font-bold">
-                                <span class="text-slate-500">搜索节点</span>
-                                <span class="text-slate-300">{{ lastStats.l1_planner.nodes_expanded }}</span>
-                            </div>
-                        </div>
-                    </div>
+                    <!-- 浮动性能面板 (使用 fixed 定位，不占用布局空间) -->
+                    <stats-panel :stats="lastStats" :map-state="mapState" :settings="settings"></stats-panel>
                 </div>
 
-                <!-- Log Panel (Bottom) -->
-                <div class="h-48 shrink-0 relative z-10" v-show="ui.showLogs">
-                    <log-panel :logs="logs" @clear="logs = []" @close="ui.showLogs = false"></log-panel>
+                <!-- 水平分割条 (仅当日志展开时显示/或始终显示但只在展开时有效) -->
+                <div v-if="ui.showLogs" class="resizer-horizontal" @mousedown="startResizeLog" :class="{ 'resizing': ui.resizingLog }"></div>
+
+                <!-- Log Panel (Height Dynamic) -->
+                <div class="shrink-0 relative z-20 transition-all duration-300 ease-in-out border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_30px_rgba(0,0,0,0.1)]"
+                     :style="{ height: ui.showLogs ? ui.logHeight + 'px' : '32px' }">
+                    
+                    <div v-if="ui.showLogs" class="h-full bg-white dark:bg-[#1e1e1e]">
+                        <log-panel :logs="logs" @clear="logs = []" @close="ui.showLogs = false"></log-panel>
+                    </div>
+                    
+                    <button v-else @click="ui.showLogs = true" class="w-full h-full bg-white dark:bg-[#161e2e] hover:bg-slate-50 dark:hover:bg-[#1f2937] flex items-center justify-center text-xs text-slate-500 dark:text-slate-400 font-bold transition-colors gap-2 tracking-wide">
+                        <i class="ph-bold ph-terminal-window"></i> 显示系统终端日志
+                    </button>
                 </div>
-                <button v-if="!ui.showLogs" @click="ui.showLogs = true" class="absolute bottom-0 left-0 right-0 h-6 bg-slate-800 hover:bg-slate-700 flex items-center justify-center text-[10px] text-slate-400 border-t border-slate-700 transition-colors z-20">
-                    <i class="ph-bold ph-caret-up mr-1"></i> 显示日志
-                </button>
 
             </main>
         </div>
     </div>
     {% endraw %}
-
-    <!-- 主程序逻辑 (ES Module) -->
+    
     <script type="module" src="/static/js/app.js"></script>
 </body>
 </html>

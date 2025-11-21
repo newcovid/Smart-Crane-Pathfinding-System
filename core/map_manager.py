@@ -6,25 +6,25 @@ from typing import List, Tuple, Optional, Dict, Union, Any
 
 try:
     import numpy as np
-    from scipy.ndimage import distance_transform_edt
+    from scipy.ndimage import distance_transform_edt, maximum_filter
 
     HAS_SCIPY = True
 except ImportError:
     HAS_SCIPY = False
 
+# 类型别名
 Grid2D = List[List[int]]
 Grid3D = List[List[List[int]]]
 
 
 class WorkshopMapManager:
     """
-    车间地图管理器 (3D Voxel Engine) - V3.6 Ceiling Check Fix
+    【车间地图管理器 (3D Core) - V5 Wall Inflation Fix】
 
-    更新内容:
-    1. [修复] 3D 物理边界检查逻辑：
-       - 区分了【障碍物/地板安全余量】和【天花板防穿模余量】。
-       - 天花板检查不再包含巨大的 Safety Margin，仅检查 (Z + 半高 > MapHeight)，
-         允许起重机升至最高点附近作业。
+    Fixes:
+    1. [Boundary Safety] 增加了车间边界的膨胀处理。
+       现在四周墙壁被视为无限高的硬障碍物，算法会自动保持安全距离。
+    2. 几何碰撞检测增加了边界检查。
     """
 
     def __init__(
@@ -59,10 +59,7 @@ class WorkshopMapManager:
         self._inflated_grid_caches: Dict[Tuple, Grid2D] = {}
         self._3d_grid_caches: Dict[Tuple, Grid3D] = {}
 
-        self.log(
-            f"[MapMgr] Init: {self.width_m}x{self.length_m}x{self.height_m}m "
-            f"Grid: {self.rows}x{self.cols}x{self.layers}"
-        )
+        self.log(f"[MapMgr] Init: {self.width_m}x{self.length_m}x{self.height_m}m")
 
     def get_full_state(self) -> Dict[str, Any]:
         with self._lock:
@@ -78,6 +75,8 @@ class WorkshopMapManager:
     def _invalidate_cache(self) -> None:
         self._inflated_grid_caches.clear()
         self._3d_grid_caches.clear()
+
+    # --- 坐标转换 ---
 
     def world_to_grid(
         self, x_m: float, y_m: float, z_m: float = 0.0
@@ -98,7 +97,7 @@ class WorkshopMapManager:
         z_m = (layer + 0.5) * self.resolution_m
         return (x_m, y_m, z_m)
 
-    # --- Obstacle Management ---
+    # --- 障碍物管理 ---
 
     def add_static_obstacle(
         self, obs_id: str, x: float, y: float, w: float, h: float, z: float = 100.0
@@ -112,7 +111,7 @@ class WorkshopMapManager:
                 "z_m": z,
             }
             self._invalidate_cache()
-            self.log(f"[MapMgr] StaticObs Added: {obs_id} at ({x},{y}) {w}x{h}")
+            self.log(f"[MapMgr] Added Static: {obs_id}")
 
     def remove_static_obstacle(self, obs_id: str):
         with self._lock:
@@ -155,15 +154,66 @@ class WorkshopMapManager:
                     return (oid, "static")
             return None
 
-    # --- Grid Generation ---
+    # --- 几何碰撞检测 (真理层) ---
+
+    def check_collision_raw(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        xy_margin: float,
+        z_margin: float,
+        ignore_z: bool = False,
+    ) -> bool:
+        """
+        [真理层] 基于连续 3D 几何的精确碰撞检测。
+        包含：1. 障碍物检测 2. 车间边界检测
+        """
+        # 1. 边界检测 (Wall Collision)
+        # 如果 (x, y) 距离任何一面墙小于 xy_margin，视为碰撞
+        if x - xy_margin < 0 or x + xy_margin > self.width_m:
+            return True
+        if y - xy_margin < 0 or y + xy_margin > self.length_m:
+            return True
+
+        # 天花板和地板检测 (可选，视业务需求)
+        if z + z_margin > self.height_m or z - z_margin < 0:
+            pass  # 暂时允许贴地和贴顶，通常由硬件限位控制
+
+        with self._lock:
+            all_obs = list(self.static_obstacles.values()) + list(
+                self.dynamic_obstacles.values()
+            )
+
+            for o in all_obs:
+                if not (
+                    x + xy_margin > o["x_m"] and x - xy_margin < o["x_m"] + o["w_m"]
+                ):
+                    continue
+                if not (
+                    y + xy_margin > o["y_m"] and y - xy_margin < o["y_m"] + o["h_m"]
+                ):
+                    continue
+
+                if ignore_z:
+                    return True
+
+                obs_z = o.get("z_m", 100.0)
+                if z - z_margin <= obs_z:
+                    return True
+
+            return False
+
+    # --- 网格生成 ---
 
     def _mark_obstacle_area(self, grid: Grid2D, x: float, y: float, w: float, h: float):
         r_s, c_s, _ = self.world_to_grid(x, y)
         r_e, c_e, _ = self.world_to_grid(x + w - 0.01, y + h - 0.01)
+        r_s, r_e = max(0, r_s), min(self.rows - 1, r_e)
+        c_s, c_e = max(0, c_s), min(self.cols - 1, c_e)
         for r in range(r_s, r_e + 1):
             for c in range(c_s, c_e + 1):
-                if 0 <= r < self.rows and 0 <= c < self.cols:
-                    grid[r][c] = 1
+                grid[r][c] = 1
 
     def _get_base_grid_2d(
         self, check_z_height: Optional[float], z_safety_margin: float
@@ -183,53 +233,50 @@ class WorkshopMapManager:
                 self._mark_obstacle_area(grid, o["x_m"], o["y_m"], o["w_m"], o["h_m"])
         return grid
 
-    def get_inflated_grid(
+    def get_2d_projection_grid(
         self, xy_margin: float, check_z: Optional[float] = None, z_margin: float = 0.0
     ) -> Grid2D:
         with self._lock:
             key = (round(xy_margin, 3), check_z, round(z_margin, 3))
             if key in self._inflated_grid_caches:
                 return self._inflated_grid_caches[key]
-
             base = self._get_base_grid_2d(check_z, z_margin)
             inflated = _create_inflated_grid_2d(base, xy_margin)
-
             self._inflated_grid_caches[key] = inflated
             return inflated
 
-    def get_3d_inflated_grid(
-        self, xy_margin: float, z_margin_obs: float, z_margin_ceil: float
+    def get_3d_voxel_grid(
+        self,
+        xy_margin: float,
+        z_margin_obs: float,
+        z_margin_ceil: float,
+        is_infinite: bool = False,
     ) -> Grid3D:
-        """
-        生成 3D 膨胀体素网格 (分离了障碍物与天花板的膨胀逻辑)。
-
-        Args:
-            xy_margin: 水平膨胀半径
-            z_margin_obs: 对地/障碍物的 Z 轴安全膨胀 (包含 SafetyMargin + HalfHeight)
-            z_margin_ceil: 对天花板的 Z 轴防穿模膨胀 (通常仅 HalfHeight，无 SafetyMargin)
-        """
         with self._lock:
-            key = (round(xy_margin, 3), round(z_margin_obs, 3), round(z_margin_ceil, 3))
+            key = (
+                round(xy_margin, 3),
+                round(z_margin_obs, 3),
+                round(z_margin_ceil, 3),
+                is_infinite,
+            )
             if key in self._3d_grid_caches:
                 return self._3d_grid_caches[key]
 
-            self.log(
-                f"[MapMgr] 3D Grid: xy={xy_margin:.1f}, z_obs={z_margin_obs:.1f}, z_ceil={z_margin_ceil:.1f}"
-            )
-
-            # 1. 基础高度图
             height_map = np.zeros((self.rows, self.cols), dtype=np.float32)
             all_obs = list(self.static_obstacles.values()) + list(
                 self.dynamic_obstacles.values()
             )
+
             for o in all_obs:
                 r_s, c_s, _ = self.world_to_grid(o["x_m"], o["y_m"])
                 r_e, c_e, _ = self.world_to_grid(
                     o["x_m"] + o["w_m"], o["y_m"] + o["h_m"]
                 )
 
-                # 障碍物占据高度 = 本体 + 障碍物余量
-                obs_occupy_z = o.get("z_m", 100.0) + z_margin_obs
+                if is_infinite:
+                    obs_occupy_z = self.height_m + 1.0
+                else:
+                    obs_occupy_z = o.get("z_m", 100.0) + z_margin_obs
 
                 r_s, r_e = max(0, r_s), min(self.rows, r_e + 1)
                 c_s, c_e = max(0, c_s), min(self.cols, c_e + 1)
@@ -238,38 +285,33 @@ class WorkshopMapManager:
                         height_map[r_s:r_e, c_s:c_e], obs_occupy_z
                     )
 
-            # 2. 水平膨胀
             if xy_margin > 0 and HAS_SCIPY:
-                from scipy.ndimage import maximum_filter
+                radius = int(math.ceil(xy_margin))
+                y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+                mask = x**2 + y**2 <= xy_margin**2
 
-                k_size = int(math.ceil(xy_margin)) * 2 + 1
-                height_map = maximum_filter(height_map, size=k_size)
+                # [Fix] 墙壁膨胀: 使用 mode='constant' 和 cval=INF
+                # 这样 maximum_filter 会认为图像边界外全是无限高的墙，从而将边界内的像素值拉高
+                height_map = maximum_filter(
+                    height_map,
+                    footprint=mask,
+                    mode="constant",
+                    cval=self.height_m + 1.0,
+                )
 
-            # 3. 3D 体素化
             z_coords = (np.arange(self.layers) + 0.5) * self.resolution_m
-
-            # A. 障碍物遮挡 (Low Obstacles)
             is_obstacle = z_coords.reshape(1, 1, -1) < height_map.reshape(
                 self.rows, self.cols, 1
             )
-
-            # B. 天花板碰撞 (Ceiling Collision)
-            # 逻辑: 当前高度 + 天花板余量 > 地图高度 -> 碰撞
             is_ceiling_hit = (z_coords + z_margin_ceil) > self.height_m
-
-            # C. 地板碰撞 (Floor Collision)
-            # 逻辑: 当前高度 - 障碍物余量 (此处复用 obs 余量作为对地余量) < 0 -> 碰撞
             is_floor_hit = (z_coords - z_margin_obs) < 0
-
-            # 4. 合并
             final_grid_mask = (
                 is_obstacle
                 | is_ceiling_hit.reshape(1, 1, -1)
                 | is_floor_hit.reshape(1, 1, -1)
             )
 
-            voxel_grid_np = final_grid_mask.astype(np.int8)
-            grid_3d = voxel_grid_np.tolist()
+            grid_3d = final_grid_mask.astype(np.int8).tolist()
             self._3d_grid_caches[key] = grid_3d
             return grid_3d
 
@@ -279,11 +321,28 @@ def _create_inflated_grid_2d(grid: Grid2D, safety_margin: float) -> Grid2D:
     cols = len(grid[0]) if rows > 0 else 0
     if rows == 0:
         return []
+
     if HAS_SCIPY:
         np_grid = np.array(grid, dtype=np.int8)
-        feature_mask = (np_grid == 0).astype(int)
+        if np.sum(np_grid) == 0:
+            # [Optimization] 如果是空地图，也需要考虑墙壁膨胀
+            # 但为了简单，直接 padding 算一次 EDT
+            pass
+
+        # [Fix] 墙壁膨胀: 手动 Padding 一圈 1 (障碍物)
+        # np.pad(array, pad_width, mode='constant', constant_values=1)
+        np_grid_padded = np.pad(
+            np_grid, pad_width=1, mode="constant", constant_values=1
+        )
+
+        feature_mask = (np_grid_padded == 0).astype(int)
         dist_map = distance_transform_edt(feature_mask)
+
+        # Crop back to original size
+        dist_map = dist_map[1:-1, 1:-1]
+
         inflated_np = (dist_map <= safety_margin).astype(int)
         inflated_np = np.maximum(inflated_np, np_grid)
         return inflated_np.tolist()
+
     return grid
