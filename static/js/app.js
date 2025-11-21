@@ -53,7 +53,7 @@ const app = createApp({
             },
 
             mapState: {
-                width: 0, length: 0,
+                width: 0, length: 0, height_m: 20, // [Fix] 初始化 height_m
                 static_obstacles: {}, dynamic_obstacles: {},
                 resolution: 0.5,
                 inflated_grid: null
@@ -65,13 +65,12 @@ const app = createApp({
                 start: { x: 5, y: 5, z: 5.0 },
                 end: { x: 30, y: 20, z: 5.0 }
             },
-            // [UI Layout State]
             ui: {
                 sidebarOpen: true,
                 viewMode: '2d',
-                showLogs: false, // 默认收起
-                sidebarWidth: 340, // 初始宽度
-                logHeight: 200,    // 初始展开高度
+                showLogs: false,
+                sidebarWidth: 340,
+                logHeight: 200,
                 resizingSidebar: false,
                 resizingLog: false
             },
@@ -89,7 +88,7 @@ const app = createApp({
 
             const doDrag = (e) => {
                 let newWidth = startWidth + (e.clientX - startX);
-                newWidth = Math.max(280, Math.min(newWidth, 500)); // 限制范围
+                newWidth = Math.max(280, Math.min(newWidth, 500));
                 state.ui.sidebarWidth = newWidth;
             };
 
@@ -109,7 +108,6 @@ const app = createApp({
             const startHeight = state.ui.logHeight;
 
             const doDrag = (e) => {
-                // 向上拖动是增加高度，所以是 start - current
                 let newHeight = startHeight + (startY - e.clientY);
                 newHeight = Math.max(100, Math.min(newHeight, window.innerHeight - 100));
                 state.ui.logHeight = newHeight;
@@ -125,7 +123,7 @@ const app = createApp({
             window.addEventListener('mouseup', stopDrag);
         };
 
-        // --- Error Handling ---
+        // Error Boundary
         onErrorCaptured((err, instance, info) => {
             console.error('[Vue Error]', err, info);
             return false;
@@ -150,7 +148,7 @@ const app = createApp({
             return Math.round(v / res) * res;
         };
 
-        // Socket Handlers
+        // Socket
         socket.on('connect', () => {
             state.connection.connected = true;
             state.connection.statusText = '在线';
@@ -165,6 +163,8 @@ const app = createApp({
             try {
                 state.mapState.width = d.width_m;
                 state.mapState.length = d.length_m;
+                // [Fix] 关键修复：同步 height_m，否则前端计算 3D 网格总数时会 NaN
+                state.mapState.height_m = d.height_m;
                 state.mapState.resolution = d.resolution_m;
                 state.mapState.static_obstacles = d.static_obstacles || {};
                 state.mapState.dynamic_obstacles = d.dynamic_obstacles || {};

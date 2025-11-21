@@ -1,5 +1,8 @@
 const { ref, computed, reactive, onMounted, onUnmounted } = Vue;
 
+// ... (前 1-5 个组件保持不变，请保留原代码) ...
+// 为节省篇幅，这里只展示 StatsPanel 的修改
+
 // 1. 分区卡片组件
 export const SectionGroup = {
     props: {
@@ -139,20 +142,14 @@ export const ToolBtn = {
     `
 };
 
-// 6. 综合统计看板 (右上角锚点优化版)
-// Fixes:
-// 1. 使用 right/top 定位，确保切换收起/展开时，右上角按钮位置不动。
-// 2. 拖拽边界逻辑动态化，允许小图标贴边。
+// 6. 综合统计看板 (V3: Fix Rate & Time)
 export const StatsPanel = {
     props: ['stats', 'mapState', 'settings'],
     setup(props) {
         const isExpanded = ref(true);
 
-        // [Layout Fix] 改为右上角锚点定位 (right, top)
         const pos = reactive({ right: 20, top: 80 });
-
         const isDragging = ref(false);
-        // 记录拖拽开始时的状态
         let dragStart = { x: 0, y: 0, initialRight: 0, initialTop: 0 };
 
         const startDrag = (e) => {
@@ -161,32 +158,21 @@ export const StatsPanel = {
             dragStart.y = e.clientY;
             dragStart.initialRight = pos.right;
             dragStart.initialTop = pos.top;
-
             window.addEventListener('mousemove', handleDrag);
             window.addEventListener('mouseup', stopDrag);
         };
 
         const handleDrag = (e) => {
             if (!isDragging.value) return;
-
             const deltaX = e.clientX - dragStart.x;
             const deltaY = e.clientY - dragStart.y;
-
-            // 计算新位置
-            // 向左拖动(deltaX < 0)，right 应该增加 -> right = initial - deltaX
             let newRight = dragStart.initialRight - deltaX;
             let newTop = dragStart.initialTop + deltaY;
-
-            // 动态获取当前宽度
             const currentWidth = isExpanded.value ? 260 : 44;
-
-            // 边界限制: 保证不拖出屏幕
             const maxRight = window.innerWidth - currentWidth;
             const maxTop = window.innerHeight - 50;
-
             newRight = Math.max(0, Math.min(newRight, maxRight));
             newTop = Math.max(0, Math.min(newTop, maxTop));
-
             pos.right = newRight;
             pos.top = newTop;
         };
@@ -203,10 +189,23 @@ export const StatsPanel = {
             if (!props.mapState || !props.mapState.width) return { totalVoxels: 0, dims: '-' };
             const w = Math.ceil(props.mapState.width / props.mapState.resolution);
             const l = Math.ceil(props.mapState.length / props.mapState.resolution);
-            const h = props.settings.ENABLE_FIXED_HEIGHT_CRUISE ? 1 : Math.ceil(props.mapState.height_m / props.mapState.resolution);
+            // 处理 height_m 可能为空的情况
+            const rawH = props.mapState.height_m || props.settings.MAP_HEIGHT_M || 20;
+            const h = props.settings.ENABLE_FIXED_HEIGHT_CRUISE ? 1 : Math.ceil(rawH / props.mapState.resolution);
             const total = w * l * h;
             const unit = total > 1000000 ? `${(total / 1000000).toFixed(1)}M` : (total > 1000 ? `${(total / 1000).toFixed(1)}k` : total);
             return { totalVoxels: unit, gridDims: `${w}x${l}x${h}` };
+        });
+
+        // [Fix 1] 膨胀耗时显示优化
+        const gridPrepTime = computed(() => {
+            if (props.stats && props.stats.timings && props.stats.timings.grid_prep_ms !== undefined) {
+                const t = props.stats.timings.grid_prep_ms;
+                // 如果非常小（缓存命中），显示 <0.1
+                if (t < 0.1) return '<0.1';
+                return t.toFixed(1);
+            }
+            return '0.0';
         });
 
         const algoData = computed(() => {
@@ -218,21 +217,34 @@ export const StatsPanel = {
             };
         });
 
+        // [Fix 2] 变更率显示修复
         const pipelineSteps = computed(() => {
             if (!props.stats || !props.stats.processors_stats) return [];
             return props.stats.processors_stats.map(p => {
                 let name = p.processor;
                 if (name === 'GreedyShortcut') name = '捷径优化';
                 if (name === 'BezierSmoother') name = '贝塞尔平滑';
+
                 const diff = p.output_nodes - p.input_nodes;
                 const icon = diff < 0 ? 'ph-arrow-down-right' : (diff > 0 ? 'ph-arrow-up-right' : 'ph-arrow-right');
-                const color = diff < 0 ? 'text-green-500' : (diff > 0 ? 'text-orange-500' : 'text-slate-400');
+
+                // 颜色：减少(优)为绿，增加(插值)为蓝，不变为灰
+                const color = diff < 0 ? 'text-emerald-500' : (diff > 0 ? 'text-blue-500' : 'text-slate-400');
+
+                // 变更率文本处理
+                // reduction_rate 是 (In - Out) / In
+                // 对于捷径(减少)，rate > 0 (e.g. 0.5 -> 50%)
+                // 对于贝塞尔(增加)，rate < 0 (e.g. -5.4 -> -540%)
+                const absRate = Math.abs(p.reduction_rate * 100).toFixed(0);
+                const sign = diff > 0 ? '+' : (diff < 0 ? '-' : ''); // 显式符号
+                const rateText = `${sign}${absRate}%`;
+
                 return {
                     name,
                     time: p.process_time_ms.toFixed(1),
                     in: p.input_nodes,
                     out: p.output_nodes,
-                    rate: (p.reduction_rate * 100).toFixed(0),
+                    rate: rateText,
                     diff, icon, color
                 };
             });
@@ -245,19 +257,19 @@ export const StatsPanel = {
             return 'text-rose-500';
         });
 
-        return { isExpanded, toggle, envData, algoData, pipelineSteps, totalTimeColor, pos, startDrag };
+        return { isExpanded, toggle, envData, gridPrepTime, algoData, pipelineSteps, totalTimeColor, pos, startDrag };
     },
     template: `
     <div class="fixed z-50 stats-draggable flex flex-col items-end transition-all duration-200 ease-out" 
          :style="{ top: pos.top + 'px', right: pos.right + 'px' }">
          
-        <!-- 1. 收起状态：小图标 -->
+        <!-- 1. Collapsed Icon -->
         <button v-if="!isExpanded" @mousedown="startDrag" @click="toggle" 
             class="bg-white dark:bg-slate-800 text-slate-500 dark:text-slate-400 p-2.5 rounded-lg shadow-lg border border-slate-200 dark:border-slate-700 hover:text-primary hover:scale-105 transition-all cursor-move active:cursor-grabbing relative z-50">
             <i class="ph-bold ph-chart-polar text-xl"></i>
         </button>
 
-        <!-- 2. 展开状态：面板 -->
+        <!-- 2. Expanded Panel -->
         <div v-else class="w-[260px] bg-white/95 dark:bg-[#1e293b]/95 backdrop-blur-xl border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl overflow-hidden flex flex-col animate-fadeIn transition-colors">
             <!-- Header -->
             <div @mousedown="startDrag" class="flex items-center justify-between px-3 py-2 border-b border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-white/5 cursor-move active:cursor-grabbing select-none group">
@@ -265,7 +277,6 @@ export const StatsPanel = {
                     <i class="ph-bold ph-dots-six-vertical text-slate-300"></i>
                     <span>性能监控</span>
                 </div>
-                <!-- Toggle Button: 位置校准 -->
                 <button @mousedown.stop @click="toggle" class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors p-1 rounded hover:bg-black/5 dark:hover:bg-white/10">
                     <i class="ph-bold ph-minus text-xs"></i>
                 </button>
@@ -274,16 +285,20 @@ export const StatsPanel = {
             <!-- Content -->
             <div class="p-3 space-y-3 overflow-y-auto max-h-[60vh] custom-scrollbar" @mousedown.stop>
                 
-                <!-- Environment -->
+                <!-- Environment & Prep -->
                 <div class="space-y-1.5">
-                    <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">环境 (Env)</div>
+                    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex justify-between">
+                        <span>环境 (Env)</span>
+                        <!-- 显示处理好的 gridPrepTime -->
+                        <span class="font-mono text-slate-500 dark:text-slate-400">{{ gridPrepTime }}ms Prep</span>
+                    </div>
                     <div class="grid grid-cols-2 gap-2">
                         <div class="bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded border border-slate-100 dark:border-slate-700/50">
-                            <div class="text-[9px] text-slate-400 mb-0.5">Total Grid</div>
+                            <div class="text-[10px] text-slate-400 mb-0.5">Total Grid</div>
                             <div class="font-mono text-xs font-bold text-slate-600 dark:text-slate-300">{{ envData.totalVoxels }}</div>
                         </div>
                         <div class="bg-slate-50 dark:bg-slate-800/50 p-1.5 rounded border border-slate-100 dark:border-slate-700/50">
-                            <div class="text-[9px] text-slate-400 mb-0.5">Dim</div>
+                            <div class="text-[10px] text-slate-400 mb-0.5">Dim</div>
                             <div class="font-mono text-xs font-bold text-slate-600 dark:text-slate-300 truncate" :title="envData.gridDims">{{ envData.gridDims }}</div>
                         </div>
                     </div>
@@ -292,16 +307,15 @@ export const StatsPanel = {
                 <!-- Planning -->
                 <div class="space-y-1.5 relative">
                     <div class="absolute left-[11px] top-5 bottom-[-8px] w-px bg-slate-200 dark:bg-slate-700"></div>
-                    <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider">规划 (Plan)</div>
-                    
+                    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">规划 (Plan)</div>
                     <div class="relative bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800 rounded p-2">
                         <div class="flex justify-between items-center mb-1">
                             <span class="text-[10px] font-bold text-blue-600 dark:text-blue-400">{{ algoData.name }}</span>
-                            <span class="text-[9px] font-mono bg-white dark:bg-slate-800 px-1 rounded text-slate-500 border border-blue-100 dark:border-slate-700 shadow-sm">
+                            <span class="text-[10px] font-mono bg-white dark:bg-slate-800 px-1 rounded text-slate-500 border border-blue-100 dark:border-slate-700 shadow-sm">
                                 {{ algoData.time }}ms
                             </span>
                         </div>
-                        <div class="flex items-center gap-1.5 text-[9px] text-slate-500 dark:text-slate-400">
+                        <div class="flex items-center gap-1.5 text-[10px] text-slate-500 dark:text-slate-400">
                             <i class="ph-bold ph-magnifying-glass"></i>
                             <span>Nodes: <strong class="text-slate-700 dark:text-slate-300 font-mono">{{ algoData.nodes }}</strong></span>
                         </div>
@@ -311,25 +325,25 @@ export const StatsPanel = {
                 <!-- Pipeline -->
                 <div v-if="pipelineSteps.length > 0" class="space-y-2 relative">
                     <div class="absolute left-[11px] top-[-10px] bottom-2 w-px bg-slate-200 dark:bg-slate-700"></div>
-                    <div class="text-[9px] font-bold text-slate-400 uppercase tracking-wider pl-6">优化 (Opt)</div>
-                    
+                    <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-6">优化 (Opt)</div>
                     <div v-for="(step, idx) in pipelineSteps" :key="idx" class="relative pl-6">
                         <!-- Dot -->
-                        <div class="absolute left-[9px] top-2.5 w-1.5 h-1.5 rounded-full border border-white dark:border-slate-800 bg-slate-300 dark:bg-slate-600 z-10"></div>
+                        <div class="absolute left-[10px] top-2.5 w-1.5 h-1.5 rounded-full border border-white dark:border-slate-800 bg-slate-300 dark:bg-slate-600 z-10"></div>
                         
                         <div class="bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-700 rounded p-2 transition-all hover:border-slate-300 dark:hover:border-slate-600">
                             <div class="flex justify-between items-center mb-1">
                                 <span class="text-[10px] font-bold text-slate-600 dark:text-slate-300">{{ step.name }}</span>
-                                <span class="text-[9px] font-mono text-slate-400">{{ step.time }}ms</span>
+                                <span class="text-[10px] font-mono text-slate-400">{{ step.time }}ms</span>
                             </div>
                             <div class="flex items-center justify-between">
-                                <div class="flex items-center gap-1 text-[9px] text-slate-500 font-mono">
+                                <div class="flex items-center gap-1 text-[10px] text-slate-500 font-mono">
                                     <span>{{ step.in }}</span>
                                     <i :class="[step.icon, step.color]" class="text-[8px]"></i>
                                     <span class="text-slate-700 dark:text-slate-300 font-bold">{{ step.out }}</span>
                                 </div>
-                                <span class="text-[9px] font-bold" :class="step.diff < 0 ? 'text-emerald-500' : 'text-slate-400'">
-                                    {{ step.diff > 0 ? '+' : '' }}{{ step.rate }}%
+                                <span class="text-[10px] font-bold" :class="step.color">
+                                    <!-- 使用处理好的 rateText -->
+                                    {{ step.rate }}
                                 </span>
                             </div>
                         </div>
@@ -339,7 +353,7 @@ export const StatsPanel = {
                 <!-- Total -->
                 <div class="pt-2 border-t border-slate-200 dark:border-slate-700/50">
                     <div class="flex justify-between items-end">
-                        <span class="text-[9px] text-slate-400 uppercase font-bold tracking-wider">TOTAL LATENCY</span>
+                        <span class="text-[10px] text-slate-400 uppercase font-bold tracking-wider">TOTAL LATENCY</span>
                         <div class="flex items-baseline gap-0.5">
                             <span class="text-lg font-mono font-bold" :class="totalTimeColor">
                                 {{ stats && stats.timings ? stats.timings.total_ms.toFixed(1) : 0 }}
@@ -348,7 +362,6 @@ export const StatsPanel = {
                         </div>
                     </div>
                 </div>
-
             </div>
         </div>
     </div>
