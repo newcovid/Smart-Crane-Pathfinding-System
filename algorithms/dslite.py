@@ -7,7 +7,7 @@ from typing import List, Tuple, Dict, Optional, Set, Union, Any
 from .base import PathPlannerBase, NodeType
 
 # 浮点数比较容差 (用于判断两个浮点数是否相等)
-EPSILON = 1e-5
+EPSILON = 1e-4
 # 无穷大常量 (表示不可达或尚未探索)
 INF = float("inf")
 
@@ -88,21 +88,26 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         total_voxels = max(1000, self.rows * self.cols * max(1, self.layers))
         self.max_iter_limit = total_voxels * 20
 
+        # [优化] 动态计算不可达代价阈值 (De-hardcoding 1,000,000)
+        # 逻辑: 即使是全图最长路径 (遍历所有格子)，其代价也不应超过 total_voxels * max_step_cost
+        # 我们乘以一个安全系数 (如 10.0) 来作为判定"不可达"的软上限
+        # 这比硬编码的 1,000,000 更适应不同尺寸的地图
+        max_step_cost = 1.74  # sqrt(3) 约等于 1.732
+        self.cost_threshold = float(total_voxels) * max_step_cost * 10.0
+        # 确保阈值不低于基础值，防止微型地图误判
+        self.cost_threshold = max(100000.0, self.cost_threshold)
+
         # 预计算移动代价，避免重复开方
         self.COST_1 = 1.0
         self.COST_2 = 1.41421356
         self.COST_3 = 1.73205081
 
-        # 计算总格点数 (Total Voxels)
-        total_grid_size = self.rows * self.cols * self.layers
-
         # 设定动态阈值
-        # 逻辑：至少允许遍历全图 5 次，且最低不少于 5000 次 (防止微型地图瞬间报错)
-        self.max_nodes_expanded = max(5000, total_grid_size * 5)
+        self.max_nodes_expanded = max(5000, total_voxels * 5)
 
-        # 打印日志告知当前的熔断限制
         self.logger.info(
-            f"[D* Config] 动态熔断阈值已设定: {self.max_nodes_expanded} (地图大小: {total_grid_size})"
+            f"[D* Config] 熔断阈值: {self.max_nodes_expanded} nodes, "
+            f"代价阈值: {self.cost_threshold:.1f} (地图体素: {total_voxels})"
         )
 
         self.logger.info(
@@ -117,8 +122,8 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
     def initialize(self, start: NodeType, goal: NodeType) -> bool:
         """
-        [步骤 1] 初始化规划任务 (全量重置)。
-        通常只在第一次任务开始时调用。
+        初始化规划任务。
+        优化：如果起点/终点与上次一致，则保留搜索树，仅更新起点位置，实现增量规划。
         """
         self._reset_stats()
 
@@ -137,7 +142,20 @@ class DLitePlanner(PathPlannerBase[NodeType]):
             self.logger.warning(f"[D* Lite Init] 警告: 终点 {goal} 位于障碍物内。")
             return False
 
-        # 2. 强制重置所有状态
+        # 2. 【核心修改】检查是否可以复用状态
+        # 如果目标点没变，且 g 表不为空，说明是基于旧环境的增量更新
+        if self.goal_node == goal and self.g:
+            # 仅更新起点 (机器人移动了，或者只是障碍物变了但起点没变)
+            if self.start_node != start:
+                # 机器人移动导致的 heuristic 变化由 km 处理，这里只需更新记录
+                self.km += self._heuristic_inline(self.last_start_node, start)
+                self.last_start_node = start
+                self.start_node = start
+
+            self.logger.info(f"[D* Lite] 增量模式激活: 复用搜索树，Km={self.km:.2f}")
+            return True
+
+        # 3. 如果是全新的任务 (终点变了)，则执行全量重置 (保持原有逻辑)
         self.start_node = start
         self.goal_node = goal
         self.last_start_node = start
@@ -157,9 +175,8 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         # 计算 Key 时使用初始起点作为 heuristic 的目标
         self._insert_to_open(goal, self._calculate_key(goal))
 
-        self.logger.info(f"[D* Lite Init] 任务重置: {start} -> {goal} (反向搜索模式)")
+        self.logger.info(f"[D* Lite] 全量初始化: {start} -> {goal} (反向搜索模式)")
 
-        # 4. 初次计算路径
         if not self._compute_shortest_path():
             self.logger.warning("[D* Lite Init] 初次计算未找到路径。")
             return False
@@ -179,6 +196,18 @@ class DLitePlanner(PathPlannerBase[NodeType]):
             return
         if not changes:
             return
+
+        # [DEBUG 1] 打印变更详情
+        self.logger.debug(
+            f"[D* DEBUG] update_obstacles 触发. 变更点数量: {len(changes)}"
+        )
+        if len(changes) > 0:
+            first = changes[0]
+            u = tuple(first[:-1])
+            is_obs = self.is_obstacle(u)
+            self.logger.debug(
+                f"[D* DEBUG] 首个变更点: {u}, IsObstacleNow={is_obs}, RawChange={first}"
+            )
 
         self.logger.debug(
             f"[D* Update] 收到 {len(changes)} 个环境变化，开始增量更新..."
@@ -240,7 +269,31 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
         # 2. 再次确保路径是最新的
         # 如果机器人偏离了原定路线，或者世界发生了变化，这里会进行必要的修复
-        self._compute_shortest_path()
+        # 尝试增量计算，并包含自动降级机制
+        # 如果增量修复失败（比如超过最大迭代次数），则回退到全量重算
+        if not self._compute_shortest_path():
+            self.logger.warning(
+                "[D* Lite] 增量修复耗时过长或失败，触发自动全量重规划 (Auto-Fallback)..."
+            )
+
+            # --- Fallback: 全量重置 ---
+            # 1. 清空所有搜索树状态
+            self.U = []
+            self.open_keys.clear()
+            self.g.clear()
+            self.rhs.clear()
+            self.km = 0.0
+
+            # 2. 重新初始化终点 (反向搜索)
+            self.rhs[self.goal_node] = 0.0
+            self._insert_to_open(self.goal_node, self._calculate_key(self.goal_node))
+
+            # 3. 再次尝试计算 (此时等价于 A*)
+            if not self._compute_shortest_path():
+                self.logger.error("[D* Lite] 全量重规划失败，确实无解。")
+                return None
+            else:
+                self.logger.info("[D* Lite] 全量重规划成功挽救了路径。")
 
         # 3. 检查起点是否可达
         if self.g.get(current_pos, INF) == INF:
@@ -252,9 +305,15 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         curr = current_pos
         MAX_STEPS = self.max_nodes_expanded  # 防止死循环
 
+        # [DEBUG Fix] 1. 添加访问记录集合，用于检测死循环
+        visited_set = {curr}
+
         while curr != self.goal_node and len(path) < MAX_STEPS:
             min_cost = INF
             best_next = None
+
+            # [DEBUG Logger] 2. 仅在路径长度较短时打印，避免刷屏
+            debug_candidates = []
 
             # 遍历邻居，找 g 值最小的那个 (g值代表该邻居到终点的代价)
             for neighbor, move_cost in self._get_neighbors(curr):
@@ -262,13 +321,36 @@ class DLitePlanner(PathPlannerBase[NodeType]):
                     continue
 
                 # 预期总代价 = 移动到邻居的代价 + 邻居到终点的 g 值
-                c = move_cost + self.g.get(neighbor, INF)
+                g_neighbor = self.g.get(neighbor, INF)
+                c = move_cost + g_neighbor
+
+                # [DEBUG Fix] 收集邻居信息用于调试
+                if len(path) < 500:
+                    debug_candidates.append(f"{neighbor}:g={g_neighbor:.2f},c={c:.2f}")
+
                 if c < min_cost:
                     min_cost = c
                     best_next = neighbor
 
+            # [DEBUG Logger] 打印当前的决策情况
+            if len(path) < 500:
+                self.logger.debug(
+                    f"[PathTrace] Step {len(path)}: {curr} (g={self.g.get(curr, INF):.2f}) -> 选择 {best_next} (cost={min_cost:.2f}). 候选项: {debug_candidates}"
+                )
+
             if best_next:
+                # [DEBUG Fix] 3. 关键修复: 回环检测
+                if best_next in visited_set:
+                    self.logger.error(
+                        f"[D* Path Error] 检测到死循环! 节点 {best_next} 已在路径中。"
+                        f"当前节点: {curr}, 目标g: {self.g.get(best_next, INF)}。"
+                        "这通常意味着 g 值梯度场存在局部极小值陷阱 (Local Minimum Trap)。"
+                    )
+                    # 遇到死循环直接认为无解，不要返回错误路径给优化器去"穿模"
+                    return None
+
                 path.append(best_next)
+                visited_set.add(best_next)
                 curr = best_next
             else:
                 self.logger.error(
@@ -307,9 +389,16 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         [核心] 节点状态更新函数。
         检查节点是否一致 (Consistent)，如果不一致则更新其在优先队列中的状态。
         """
+
+        # =========================================================================
+        # 如果当前节点 u 是障碍物，它到终点的代价(rhs)必须是无穷大。
+        # 否则节点会变成“幽灵”，导致增量计算无法感知路断了。
+        # =========================================================================
+        if self.is_obstacle(u):
+            self.rhs[u] = INF
         # 1. 如果不是终点，根据邻居重新计算 rhs 值
         # rhs(u) = min(g(s) + c(u,s)) for all s in neighbors
-        if u != self.goal_node:
+        elif u != self.goal_node:
             min_rhs = INF
             for neighbor, move_cost in self._get_neighbors(u):
                 if self.is_obstacle(neighbor):
@@ -323,6 +412,12 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
         g_val = self.g.get(u, INF)
         rhs_val = self.rhs.get(u, INF)
+
+        # [DEBUG 2] 监控关键节点的状态变化 (可选: 仅针对前几个变更点或特定坐标打印)
+        # if u == (特定坐标):
+        # self.logger.debug(
+        #     f"[D* DEBUG] Update {u}: g={g_val}, rhs={rhs_val}, IsObs={self.is_obstacle(u)}"
+        # )
 
         # 2. 检查一致性并操作优先队列
         # 如果节点变得一致 (Consistent)，从 Open Set 逻辑移除
@@ -338,7 +433,17 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
     def _compute_shortest_path(self) -> bool:
         """
-        [核心循环] 持续处理优先队列，直到起点达到一致状态。
+        [D* Lite 核心循环]
+        持续处理优先队列，直到起点的一致性得到满足，或者证明无解。
+
+        算法原理解读:
+        D* Lite 维护一个优先队列 (Open List)，里面存放的是"不一致"的节点 (g != rhs)。
+        - g: 我们当前认为的到终点的代价。
+        - rhs: 根据邻居推算出的到终点的理论最小代价。
+
+        循环不仅要处理堆里的节点，还要时刻关注"起点"的状态。
+        只要堆里还有比"起点当前Key"更小的节点，或者起点本身就是"不一致"的，
+        我们就必须继续传播代价波浪，修补地图变化带来的影响。
         """
         if not self.start_node:
             return False
@@ -349,73 +454,114 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         get_g = self.g.get
         get_rhs = self.rhs.get
 
-        max_iter = self.max_iter_limit
-        iters = 0
+        # [DEBUG 3] 初始化单次搜索的访问计数器
+        visit_counts = {}
+        # 限制循环次数，防止死锁 (基于配置的限制)
+        max_iter = self.max_iter_limit * 5
+
+        # 性能统计
+        loops = 0  # 总循环次数 (含无效操作)
+        valid_expansions = 0  # 有效扩展次数 (真实计算量)
         current_expansion = 0
 
-        # 循环条件:
-        # 1. 堆不为空
-        # 2. 堆顶元素的 Key 小于起点的 Key (说明还有比当前起点路径更有潜力的节点需要处理)
-        # 3. 或者 起点的 rhs != g (起点本身状态不一致，需要修复)
+        # 循环条件: 只要堆不为空，我们就持续尝试修复路径
         while self.U:
-            iters += 1
-            if iters > max_iter:
+            loops += 1
+
+            # --- 1. 安全熔断 (Safety Cutoff) ---
+            # 使用 valid_expansions 作为熔断依据，忽略 lazy removal 带来的计数虚高
+            if valid_expansions > self.max_nodes_expanded:
+                efficiency = (valid_expansions / loops * 100) if loops > 0 else 0
                 self.logger.error(
-                    f"[D* Loop] 超过动态上限 ({max_iter} nodes)，强制中断防死锁。"
+                    f"[D* Loop] 超过有效扩展上限 ({self.max_nodes_expanded})，强制中断。\n"
+                    f"    - 堆操作总数 (Heap Pops): {loops}\n"
+                    f"    - 有效扩展数 (Valid Expansions): {valid_expansions}\n"
+                    f"    - 操作效率 (Efficiency): {efficiency:.1f}%"
                 )
                 self.stats["nodes_expanded"] = (
                     self.stats.get("nodes_expanded", 0) + current_expansion
                 )
                 return False
 
-            # 取出堆顶 (Key 最小的节点)
+            # 获取堆顶 Key 和 节点 (但不立即弹出，因为要先做判断)
             k_old, u = self.U[0]
 
-            # [优化] 核心过滤逻辑 (Lazy Removal):
-            # 如果 u 不在 open_keys 中，或者堆顶的 key 不是最新的 key
-            # 说明这是一个过期节点 (Stale Node)，直接丢弃，不消耗计算资源
+            # --- 2. 懒惰删除检查 (Lazy Removal) ---
+            # 堆中的节点可能是旧状态的残留。我们需要检查它是否有效。
+            # 如果 self.open_keys[u] 记录的新 Key 不等于堆里的 k_old，说明这个节点已经更新过了，
+            # 堆里这个是旧的垃圾数据，直接丢弃。
             if u not in self.open_keys or self.open_keys[u] != k_old:
                 heappop(self.U)
                 continue
 
-            # 再次检查起点一致性 (退出条件的另一半)
+            # [DEBUG 3] 记录并检查单点重访率 (检测死循环或震荡)
+            visit_counts[u] = visit_counts.get(u, 0) + 1
+            if visit_counts[u] == 10:  # 阈值设为10，一旦超过说明有异常震荡
+                g_u_debug = get_g(u, INF)
+                rhs_u_debug = get_rhs(u, INF)
+                self.logger.warning(
+                    f"[D* DEBUG] 警告: 节点 {u} 在单次搜索中已扩展 10 次! "
+                    f"g={g_u_debug}, rhs={rhs_u_debug}, key={k_old}, IsObs={self.is_obstacle(u)}"
+                )
+
+            # --- 3. 终结条件检查 (Termination Condition) ---
+            # [Fix Logic] 这里采用了更严格的退出判定
+            # 我们需要检查是否已经找到了通往起点的最优路径。
             start_g = get_g(self.start_node, INF)
             start_rhs = get_rhs(self.start_node, INF)
 
-            # 检查起点是否被孤立 (g和rhs都是INF)
+            # 检查起点的一致性 (g == rhs)
+            is_start_consistent = abs(start_g - start_rhs) < EPSILON
+
+            if is_start_consistent:
+                k_start = calc_key(self.start_node)
+
+                # [核心逻辑修复] 从 >= 改为 >
+                # 只有当堆顶元素的 Key *严格大于* 起点 Key 时，才安全停止。
+                # 这保证了所有与 Start 代价相同的波前（Wavefront）都被处理完毕。
+                should_terminate = False
+
+                if k_old > k_start:
+                    should_terminate = True
+                # 针对浮点数精度的额外保护：如果 f-score 确实大出 EPSILON，也停止
+                elif k_old[0] > k_start[0] + EPSILON:
+                    should_terminate = True
+
+                if should_terminate:
+                    self.stats["nodes_expanded"] = (
+                        self.stats.get("nodes_expanded", 0) + current_expansion
+                    )
+                    efficiency = (valid_expansions / loops * 100) if loops > 0 else 0
+                    self.logger.debug(
+                        f"[D* Loop] 搜索完成。\n"
+                        f"    - 有效扩展: {current_expansion} (累计本次: {valid_expansions})\n"
+                        f"    - 堆操作数: {loops}\n"
+                        f"    - 堆脏数据率: {100 - efficiency:.1f}% (效率: {efficiency:.1f}%)"
+                    )
+                    return True
+
+            # [启发式剪枝] 检查孤立点
+            # 如果起点的 g 和 rhs 都是 INF (不可达)，并且堆顶元素的代价已经非常巨大
+            # 说明我们已经搜索了很远很远，但依然没能连通起点。
             if start_g == INF and start_rhs == INF:
-                # 如果堆顶代价已经非常大，说明可能无解，提前剪枝
-                if k_old[0] > 1000000:
+                if k_old[0] > self.cost_threshold:
                     heappop(self.U)
                     if u in self.open_keys:
                         del self.open_keys[u]
                     continue
 
-            # 如果起点已经一致，且当前的堆顶 Key 已经不小于起点的 Key
-            # 说明剩下的节点只会导致更大的代价，无需继续搜索
-            if abs(start_g - start_rhs) < EPSILON:
-                k_start = calc_key(self.start_node)
-                if k_old >= k_start:
-                    self.stats["nodes_expanded"] = (
-                        self.stats.get("nodes_expanded", 0) + current_expansion
-                    )
-                    self.logger.debug(
-                        f"[D* Loop] 搜索完成。Expanded: {current_expansion}"
-                    )
-                    return True
-
-            # --- 正式扩展节点 ---
-            # 真正的弹出操作
+            # --- 4. 节点扩展 (Expansion) ---
+            # 如果还没结束，正式弹出堆顶节点进行处理
             heappop(self.U)
-            # 既然已经处理，暂时从索引移除
-            # 如果后续处理发现它仍不一致，会再次加入
-            # 如果不移除，u 会一直保留在 open_keys 中直到 g==rhs
-            # 但这里我们采用 update_vertex 负责管理的策略，不需要手动 del，update_vertex 会覆盖
-
+            # 既然已经处理，暂时从索引移除 (update_vertex 会根据情况决定是否加回)
+            # 此时我们认定这是一个有效扩展
+            valid_expansions += 1
             current_expansion += 1
+
             k_new = calc_key(u)
 
-            # 情况 1: 节点的 Key 已经过时 (比如 km 变了)，更新 Key 后重新塞回去
+            # 情况 A: 节点的 Key 已经过时 (例如 km 发生变化导致 heuristic 变化)
+            # 这时我们需要用新的 Key 把它重新塞回堆里
             if k_old < k_new:
                 self._insert_to_open(u, k_new)
                 continue
@@ -423,37 +569,56 @@ class DLitePlanner(PathPlannerBase[NodeType]):
             g_u = get_g(u, INF)
             rhs_u = get_rhs(u, INF)
 
-            # 情况 2: Overconsistent (g > rhs)
-            # 说明找到了更短的路径，通常是因为某个障碍物移除了
+            # 情况 B: 过一致 (Overconsistent, g > rhs)
+            # 这通常发生在发现了一条更短的路径时 (例如障碍物移除)。
             if g_u > rhs_u:
-                self.g[u] = rhs_u  # 更新 g 值
+                # 显式移除 open_keys 记录 (如果存在)
+                if u in self.open_keys:
+                    del self.open_keys[u]
+
+                self.g[u] = rhs_u
                 new_g = rhs_u
+
                 # 传播这个好消息给邻居
                 for s, cost in self._get_neighbors(u):
                     if self.is_obstacle(s):
                         continue
 
                     new_rhs_s = new_g + cost
-                    curr_rhs_s = get_rhs(s, INF)
-                    if new_rhs_s < curr_rhs_s:
+                    # 如果经由 u 到达 s 的代价比 s 原有的 rhs 更小，更新 s
+                    if new_rhs_s < get_rhs(s, INF):
                         self.rhs[s] = new_rhs_s
-                        self._update_vertex(s)  # 使用 update_vertex 统一管理插入
+                        self._update_vertex(s)
 
-            # 情况 3: Underconsistent (g < rhs)
-            # 说明原路径被阻断了 (障碍物增加)，该节点的代价变大了
+            # 情况 C: 欠一致 (Underconsistent, g < rhs)
+            # 这通常发生在路径被阻断时 (例如障碍物添加)。
+            # 该节点的代价变大了，我们需要先把 g 设为 INF (强制重置)
             else:
                 self.g[u] = INF  # 先设为无穷大，强制重算
                 self._update_vertex(u)  # 把自己加回去重新评估
+
                 # 通知邻居：我这里路断了，你们要重新找路
                 for s, cost in self._get_neighbors(u):
                     if self.is_obstacle(s):
                         continue
-                    self._update_vertex(s)
 
+                    # [Fix Logic] 仅当邻居 s 原本的 rhs 是通过 (u + cost) 得到时，才需要更新 s
+                    # 这里的判断使用 EPSILON 容差处理浮点数对比
+                    # 如果 s 的 rhs 等于 old_g_u + cost，说明 s 依赖于 u，现在 u 变了，s 也得变
+                    if abs(get_rhs(s, INF) - (g_u + cost)) < EPSILON:
+                        self._update_vertex(s)
+
+        # 堆空了还没找到路径，说明无解
+        efficiency = (valid_expansions / loops * 100) if loops > 0 else 0
         self.stats["nodes_expanded"] = (
             self.stats.get("nodes_expanded", 0) + current_expansion
         )
-        self.logger.debug(f"[D* Loop] 堆空退出。Expanded: {current_expansion}")
+        self.logger.debug(
+            f"[D* Loop] 堆空退出 (无更多节点可扩展)。\n"
+            f"    - 有效扩展: {valid_expansions}\n"
+            f"    - 总堆操作: {loops}\n"
+            f"    - 效率: {efficiency:.1f}%"
+        )
         return False
 
     def _heuristic_inline(self, a: Optional[NodeType], b: Optional[NodeType]) -> float:
@@ -495,17 +660,8 @@ class DLitePlanner(PathPlannerBase[NodeType]):
     def _get_neighbors(self, node: NodeType) -> List[Tuple[NodeType, float]]:
         """
         获取邻居节点。
-
-        为了性能，这里依然保持返回 List，但在内部做了内联检查 (Inline Check)。
-        包含了：
-        1. 越界检查
-        2. 障碍物检查
-        3. 切角检查 (Strict Corner Check)
+        包含了：越界检查、障碍物检查、切角检查。
         """
-        # 为了极致性能，这里不再生成复杂的列表对象
-        # 而是直接 yield 或者在一个固定流程里返回
-        # 考虑到 Python yield 也有开销，且 PathPlannerBase 接口定义返回 List，保持 List
-
         res = []
         if len(node) == 3:
             x, y, z = node  # type: ignore

@@ -234,7 +234,7 @@ def handle_add_obstacle(data: Dict[str, Any]):
         socketio.emit("update_map_state", crane_service.get_full_state())
         logger.info("[Map] 障碍物添加成功，触发自动重规划 (Auto-Replan)...")
 
-        # 3. [Auto Replan] 自动触发一次重规划
+        # 3. 自动触发一次重规划
         # 这样用户加完障碍物，路径会自动避开，体验更好
         path, stats, _ = crane_service.plan_path()
         if path:

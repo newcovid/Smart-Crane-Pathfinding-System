@@ -252,6 +252,8 @@ class TrajectoryPlanner:
             is_add: True 为新增，False 为移除。
         """
         with self.grid_lock:
+            # 记录旧网格 (用于对比差异)
+            old_grid = self.active_planning_grid
             # 1. 无论什么算法，先强制全量刷新 Grid 数据，确保底层数据是最新的
             plan_grid, vis_grid, _ = self._prepare_grids()
             self.active_planning_grid = plan_grid
@@ -266,12 +268,38 @@ class TrajectoryPlanner:
                 if self.core_planner.start_node and self.core_planner.goal_node:
                     # 计算受影响的网格区域 (Bounding Box)
                     changes = []
+                    # 获取配置状态
+                    # 定高巡航模式
                     is_fixed_height = self.config.get(
                         "ENABLE_FIXED_HEIGHT_CRUISE", True
                     )
+                    # 障碍物无限高模式
+                    is_infinite_obs = self.config.get("OBSTACLE_INFINITE_HEIGHT", True)
 
-                    # 为了安全，我们把受影响区域稍微扩大一圈 (Margin)
-                    margin_grid = 1
+                    # --- 态计算膨胀影响范围 ---
+                    # 1. 获取吊具尺寸配置 (保持与 _prepare_grids 逻辑一致)
+                    cfg = self.config
+                    shape = cfg.get("CRANE_FOOTPRINT_SHAPE", "box")
+                    c_w = cfg.get("CRANE_FOOTPRINT_WIDTH", 5.0)
+                    c_l = cfg.get("CRANE_FOOTPRINT_LENGTH", 5.0)
+
+                    # 2. 计算物理膨胀半径 (Radius)
+                    # 如果是圆形，半径就是宽度的一半；如果是矩形，取外接圆半径确保旋转安全
+                    radius_m = (
+                        (c_w / 2.0)
+                        if shape == "circle"
+                        else (math.hypot(c_w, c_l) / 2.0)
+                    )
+
+                    # 3. 转换为网格数 (Margin Grid)
+                    # 向上取整并额外+1作为安全余量，防止浮点误差导致边界格子未更新
+                    margin_grid = (
+                        int(math.ceil(radius_m / self.map_mgr.resolution_m)) + 1
+                    )
+
+                    self.logger.debug(
+                        f"[Traj] 增量Diff计算: 物理膨胀半径={radius_m:.2f}m, 扫描外扩={margin_grid}格"
+                    )
 
                     # 将物理坐标转为网格索引范围
                     r_s, c_s, _ = self.map_mgr.world_to_grid(x, y, 0)
@@ -282,28 +310,82 @@ class TrajectoryPlanner:
                     c_start = max(0, c_s - margin_grid)
                     c_end = min(self.map_mgr.cols, c_e + 1 + margin_grid)
 
+                    # --- 分支 A: 2D 定高巡航 ---
                     if is_fixed_height:
-                        # 2D 模式: 只需要遍历 x, y
-                        for r in range(r_start, r_end):
-                            for c in range(c_start, c_end):
-                                # 这里的 1 只是占位符，D* Lite 会去查最新的 self.grid
-                                changes.append((r, c, 1))
+                        should_update = True
+
+                        # 如果不是无限高模式，必须检查障碍物是否够得着巡航高度
+                        if not is_infinite_obs:
+                            cruise_z = self.config.get("CRANE_SAFE_TRAVEL_Z_M", 10.0)
+                            # 计算垂直安全余量 (需与 prepare_grids 保持一致)
+                            crane_h = self.config.get("CRANE_FOOTPRINT_HEIGHT", 2.0)
+                            z_margin_obs = self.config.get(
+                                "CRANE_Z_SAFETY_MARGIN", 0.5
+                            ) + (crane_h / 2.0)
+
+                            # 判定阈值：如果障碍物高度 z 还没碰到 (cruise_z - 安全余量)，则忽略
+                            z_threshold = cruise_z - z_margin_obs
+                            # 注意：传入的 z 参数是障碍物的高度 (Height) 或 顶部坐标
+                            if z <= z_threshold:
+                                should_update = False
+                                self.logger.debug(
+                                    f"[Traj] 障碍物过矮 (H={z} <= Thr={z_threshold:.2f})，不影响 2D 巡航层，跳过更新。"
+                                )
+
+                        if should_update:
+                            for r in range(r_start, r_end):
+                                for c in range(c_start, c_end):
+                                    # 仅当网格状态真正改变时才通知算法
+                                    val_new = plan_grid[r][c]
+                                    val_old = (
+                                        0  # 默认旧状态为0 (针对首次运行或越界保护)
+                                    )
+
+                                    # 尝试获取旧值
+                                    if old_grid is not None:
+                                        # 边界检查，防止地图尺寸突变导致越界
+                                        if 0 <= r < len(old_grid) and 0 <= c < len(
+                                            old_grid[0]
+                                        ):
+                                            val_old = old_grid[r][c]
+
+                                    # 只有新旧不一致时，才视为有效 Change
+                                    if val_new != val_old:
+                                        changes.append((r, c, val_new))
+
+                    # --- 分支 B: 3D 自由规划 ---
                     else:
-                        # 3D 模式: 需要遍历 z 轴
                         l_s = 0
                         l_e = self.map_mgr.layers
 
                         # 如果不是无限高模式，计算 Z 轴的影响范围
-                        if not self.config.get("OBSTACLE_INFINITE_HEIGHT", True):
-                            _, _, l_start_idx = self.map_mgr.world_to_grid(0, 0, z)
-                            _, _, l_end_idx = self.map_mgr.world_to_grid(0, 0, z + h)
+                        if not is_infinite_obs:
+                            _, _, l_start_idx = self.map_mgr.world_to_grid(
+                                0, 0, 0
+                            )  # 障碍物底面通常是0
+                            _, _, l_end_idx = self.map_mgr.world_to_grid(
+                                0, 0, z
+                            )  # 障碍物顶面是z
                             l_s = max(0, l_start_idx - margin_grid)
                             l_e = min(self.map_mgr.layers, l_end_idx + 1 + margin_grid)
 
                         for r in range(r_start, r_end):
                             for c in range(c_start, c_end):
                                 for l in range(l_s, l_e):
-                                    changes.append((r, c, l, 1))
+                                    # 3D 模式的对比逻辑
+                                    val_new = plan_grid[r][c][l]
+                                    val_old = 0
+
+                                    if old_grid is not None:
+                                        if (
+                                            0 <= r < len(old_grid)
+                                            and 0 <= c < len(old_grid[0])
+                                            and 0 <= l < len(old_grid[0][0])
+                                        ):
+                                            val_old = old_grid[r][c][l]
+
+                                    if val_new != val_old:
+                                        changes.append((r, c, l, val_new))
 
                     if changes:
                         self.logger.debug(
