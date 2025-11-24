@@ -74,13 +74,13 @@ class Config:
     # =========================================================================
 
     # 核心规划器: 'astar' (全局最优) 或 'dslite' (动态增量)
-    PLANNER_ALGORITHM: str = os.environ.get("PLANNER_ALGORITHM", "astar").lower()
+    PLANNER_ALGORITHM: str = os.environ.get("PLANNER_ALGORITHM", "dslite").lower()
 
     # 启发式距离: True=Octile(8邻域/26邻域), False=Euclidean(欧氏距离)
     USE_3D_OCTILE: bool = os.environ.get("USE_3D_OCTILE", "False").lower() == "true"
 
     # 启发式权重: >= 1.0. 越大越快但非最优。
-    HEURISTIC_WEIGHT: float = float(os.environ.get("HEURISTIC_WEIGHT", 1.5))
+    HEURISTIC_WEIGHT: float = float(os.environ.get("HEURISTIC_WEIGHT", 1.0))
 
     # =========================================================================
     # 5. 后处理管道 (Post-Processing)
