@@ -118,6 +118,8 @@ input[type=number]::-webkit-outer-spin-button {
 
 input[type=number] {
     -moz-appearance: textfield;
+    appearance: textfield;
+    /* [Fix] 添加标准属性以消除编辑器警告 */
 }
 
 .glass-panel {
@@ -135,4 +137,24 @@ input[type=number] {
 canvas {
     touch-action: none;
     outline: none;
+}
+
+/* --- Toast 通知动画 --- */
+.toast-enter-active,
+.toast-leave-active {
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.toast-enter-from {
+    opacity: 0;
+    transform: translateX(30px) scale(0.95);
+}
+
+.toast-leave-to {
+    opacity: 0;
+    transform: translateX(30px) scale(0.95);
+}
+
+.toast-move {
+    transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }

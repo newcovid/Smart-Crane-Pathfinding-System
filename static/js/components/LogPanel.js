@@ -9,7 +9,7 @@ export default {
                     bg-white dark:bg-[#2d2d2d] border-slate-200 dark:border-black/20 text-slate-500 dark:text-slate-400">
             <div class="flex items-center gap-2">
                 <i class="ph-bold ph-terminal-window text-primary"></i>
-                <span class="font-bold tracking-wide">SYSTEM TERMINAL</span>
+                <span class="font-bold tracking-wide">系统终端</span>
             </div>
             <div class="flex gap-2">
                 <button @click="$emit('clear')" class="hover:text-slate-800 dark:hover:text-white transition-colors" title="清空日志">

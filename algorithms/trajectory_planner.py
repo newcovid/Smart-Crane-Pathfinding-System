@@ -465,8 +465,9 @@ class TrajectoryPlanner:
             (路径点列表, 统计数据字典, 状态消息)
         """
         # 初始化统计容器，用于记录各阶段耗时和元数据
+        # 初始化 total_ms 为 0，防止前端因为缺少字段而 Crash
         stats = {
-            "timings": {},
+            "timings": {"total_ms": 0},
             "grid_meta": {},
             "processors_stats": [],
             "path_meta": {},

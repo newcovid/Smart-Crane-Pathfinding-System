@@ -40,6 +40,9 @@
     {% raw %}
     <div id="app" class="w-full h-full flex flex-col" v-cloak>
         
+        <!-- 全局通知组件 -->
+        <notification-toast :notifications="notifications" @remove="removeNotification"></notification-toast>
+
         <!-- 遮罩层 (拖拽时激活，防止 iframe 吃事件) -->
         <div v-if="ui.resizingSidebar || ui.resizingLog" class="resizing-overlay"></div>
 
@@ -209,8 +212,10 @@
                 
                 <!-- Canvas -->
                 <div class="flex-1 relative overflow-hidden">
-                    <canvas-2d v-if="ui.viewMode === '2d'" :map="mapState" :interaction="interaction" :path="pathData" :mission="missionState" :settings="settings" :visuals="visuals" :is-dark="isDark" :active="ui.viewMode === '2d'" @map-click="handleMapClick" @map-drag="handleMapDrag"></canvas-2d>
-                    <canvas-3d v-if="ui.viewMode === '3d'" :map="mapState" :path="pathData" :mission="missionState" :visuals="visuals" :is-dark="isDark" :active="ui.viewMode === '3d'"></canvas-3d>
+                    <!-- [Optimization] 使用 v-show 替代 v-if，避免切换时销毁/重建组件，实现丝滑切换 -->
+                    <canvas-2d v-show="ui.viewMode === '2d'" :map="mapState" :interaction="interaction" :path="pathData" :mission="missionState" :settings="settings" :visuals="visuals" :is-dark="isDark" :active="ui.viewMode === '2d'" @map-click="handleMapClick" @map-drag="handleMapDrag"></canvas-2d>
+                    
+                    <canvas-3d v-show="ui.viewMode === '3d'" :map="mapState" :path="pathData" :mission="missionState" :visuals="visuals" :is-dark="isDark" :active="ui.viewMode === '3d'"></canvas-3d>
                     
                     <!-- 浮动性能面板 (使用 fixed 定位，不占用布局空间) -->
                     <stats-panel :stats="lastStats" :map-state="mapState" :settings="settings"></stats-panel>

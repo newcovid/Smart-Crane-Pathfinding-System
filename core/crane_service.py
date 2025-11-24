@@ -291,7 +291,7 @@ class CraneService:
 
             # 通知 Planner 地图变了 (可能会触发 D* Lite 的增量更新)
             self.planner.handle_obstacle_update(x, y, w, h, z, is_add=True)
-            return True, "障碍物添加成功"
+            return True, f"成功添加 {oid}"
         except Exception as e:
             self.logger.error(f"[Obstacle] 添加失败: {e}")
             return False, str(e)

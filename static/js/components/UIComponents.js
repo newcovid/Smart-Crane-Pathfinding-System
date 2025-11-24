@@ -1,8 +1,5 @@
 const { ref, computed, reactive, onMounted, onUnmounted } = Vue;
 
-// ... (前 1-5 个组件保持不变，请保留原代码) ...
-// 为节省篇幅，这里只展示 StatsPanel 的修改
-
 // 1. 分区卡片组件
 export const SectionGroup = {
     props: {
@@ -142,7 +139,7 @@ export const ToolBtn = {
     `
 };
 
-// 6. 综合统计看板 (V3: Fix Rate & Time)
+// 6. 综合统计看板
 export const StatsPanel = {
     props: ['stats', 'mapState', 'settings'],
     setup(props) {
@@ -189,7 +186,6 @@ export const StatsPanel = {
             if (!props.mapState || !props.mapState.width) return { totalVoxels: 0, dims: '-' };
             const w = Math.ceil(props.mapState.width / props.mapState.resolution);
             const l = Math.ceil(props.mapState.length / props.mapState.resolution);
-            // 处理 height_m 可能为空的情况
             const rawH = props.mapState.height_m || props.settings.MAP_HEIGHT_M || 20;
             const h = props.settings.ENABLE_FIXED_HEIGHT_CRUISE ? 1 : Math.ceil(rawH / props.mapState.resolution);
             const total = w * l * h;
@@ -197,11 +193,9 @@ export const StatsPanel = {
             return { totalVoxels: unit, gridDims: `${w}x${l}x${h}` };
         });
 
-        // [Fix 1] 膨胀耗时显示优化
         const gridPrepTime = computed(() => {
             if (props.stats && props.stats.timings && props.stats.timings.grid_prep_ms !== undefined) {
                 const t = props.stats.timings.grid_prep_ms;
-                // 如果非常小（缓存命中），显示 <0.1
                 if (t < 0.1) return '<0.1';
                 return t.toFixed(1);
             }
@@ -217,7 +211,6 @@ export const StatsPanel = {
             };
         });
 
-        // [Fix 2] 变更率显示修复
         const pipelineSteps = computed(() => {
             if (!props.stats || !props.stats.processors_stats) return [];
             return props.stats.processors_stats.map(p => {
@@ -227,16 +220,9 @@ export const StatsPanel = {
 
                 const diff = p.output_nodes - p.input_nodes;
                 const icon = diff < 0 ? 'ph-arrow-down-right' : (diff > 0 ? 'ph-arrow-up-right' : 'ph-arrow-right');
-
-                // 颜色：减少(优)为绿，增加(插值)为蓝，不变为灰
                 const color = diff < 0 ? 'text-emerald-500' : (diff > 0 ? 'text-blue-500' : 'text-slate-400');
-
-                // 变更率文本处理
-                // reduction_rate 是 (In - Out) / In
-                // 对于捷径(减少)，rate > 0 (e.g. 0.5 -> 50%)
-                // 对于贝塞尔(增加)，rate < 0 (e.g. -5.4 -> -540%)
                 const absRate = Math.abs(p.reduction_rate * 100).toFixed(0);
-                const sign = diff > 0 ? '+' : (diff < 0 ? '-' : ''); // 显式符号
+                const sign = diff > 0 ? '+' : (diff < 0 ? '-' : '');
                 const rateText = `${sign}${absRate}%`;
 
                 return {
@@ -284,12 +270,10 @@ export const StatsPanel = {
             
             <!-- Content -->
             <div class="p-3 space-y-3 overflow-y-auto max-h-[60vh] custom-scrollbar" @mousedown.stop>
-                
                 <!-- Environment & Prep -->
                 <div class="space-y-1.5">
                     <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex justify-between">
                         <span>环境 (Env)</span>
-                        <!-- 显示处理好的 gridPrepTime -->
                         <span class="font-mono text-slate-500 dark:text-slate-400">{{ gridPrepTime }}ms Prep</span>
                     </div>
                     <div class="grid grid-cols-2 gap-2">
@@ -327,9 +311,7 @@ export const StatsPanel = {
                     <div class="absolute left-[11px] top-[-10px] bottom-2 w-px bg-slate-200 dark:bg-slate-700"></div>
                     <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider pl-6">优化 (Opt)</div>
                     <div v-for="(step, idx) in pipelineSteps" :key="idx" class="relative pl-6">
-                        <!-- Dot -->
                         <div class="absolute left-[10px] top-2.5 w-1.5 h-1.5 rounded-full border border-white dark:border-slate-800 bg-slate-300 dark:bg-slate-600 z-10"></div>
-                        
                         <div class="bg-slate-50 dark:bg-slate-800/30 border border-slate-100 dark:border-slate-700 rounded p-2 transition-all hover:border-slate-300 dark:hover:border-slate-600">
                             <div class="flex justify-between items-center mb-1">
                                 <span class="text-[10px] font-bold text-slate-600 dark:text-slate-300">{{ step.name }}</span>
@@ -342,7 +324,6 @@ export const StatsPanel = {
                                     <span class="text-slate-700 dark:text-slate-300 font-bold">{{ step.out }}</span>
                                 </div>
                                 <span class="text-[10px] font-bold" :class="step.color">
-                                    <!-- 使用处理好的 rateText -->
                                     {{ step.rate }}
                                 </span>
                             </div>
@@ -356,7 +337,8 @@ export const StatsPanel = {
                         <span class="text-[10px] text-slate-400 uppercase font-bold tracking-wider">TOTAL LATENCY</span>
                         <div class="flex items-baseline gap-0.5">
                             <span class="text-lg font-mono font-bold" :class="totalTimeColor">
-                                {{ stats && stats.timings ? stats.timings.total_ms.toFixed(1) : 0 }}
+                                <!-- [Fix] 安全检查 total_ms，防止 undefined 导致崩溃 -->
+                                {{ (stats && stats.timings && stats.timings.total_ms !== undefined) ? stats.timings.total_ms.toFixed(1) : '0.0' }}
                             </span>
                             <span class="text-[10px] font-bold text-slate-400">ms</span>
                         </div>
@@ -366,4 +348,56 @@ export const StatsPanel = {
         </div>
     </div>
     `
+};
+
+// 7. 通知 Toast 组件
+export const NotificationToast = {
+    props: ['notifications'],
+    emits: ['remove'],
+    template: `
+    <!-- [Change] 定位调整至右下角 (bottom-8 right-8) -->
+    <div class="fixed bottom-8 right-8 z-[100] flex flex-col gap-2 w-80 pointer-events-none">
+        <transition-group name="toast" tag="div" class="flex flex-col gap-2">
+            <div v-for="note in notifications" :key="note.id"
+                 class="pointer-events-auto flex items-start gap-3 p-3.5 rounded-xl shadow-xl border backdrop-blur-md transition-all transform select-none"
+                 :class="getClasses(note.type)">
+                
+                <!-- Icon -->
+                <div class="mt-0.5 shrink-0">
+                    <i :class="getIcon(note.type)" class="text-xl"></i>
+                </div>
+                
+                <!-- Content -->
+                <div class="flex-1 min-w-0">
+                    <h4 v-if="note.title" class="text-sm font-bold opacity-95 mb-0.5 leading-none">{{ note.title }}</h4>
+                    <p class="text-xs leading-normal opacity-85 font-medium break-words">{{ note.message }}</p>
+                </div>
+
+                <!-- Close -->
+                <button @click="$emit('remove', note.id)" class="shrink-0 text-current opacity-50 hover:opacity-100 transition-opacity p-0.5 -mr-1 -mt-1 rounded hover:bg-black/5 dark:hover:bg-white/10">
+                    <i class="ph-bold ph-x text-sm"></i>
+                </button>
+            </div>
+        </transition-group>
+    </div>
+    `,
+    setup() {
+        const getClasses = (type) => {
+            switch (type) {
+                case 'error': return 'bg-red-50/95 dark:bg-red-900/95 border-red-200 dark:border-red-800 text-red-700 dark:text-red-200';
+                case 'warning': return 'bg-amber-50/95 dark:bg-amber-900/95 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-200';
+                case 'success': return 'bg-emerald-50/95 dark:bg-emerald-900/95 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-200';
+                default: return 'bg-blue-50/95 dark:bg-blue-900/95 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-200';
+            }
+        };
+        const getIcon = (type) => {
+            switch (type) {
+                case 'error': return 'ph-fill ph-warning-circle';
+                case 'warning': return 'ph-fill ph-warning';
+                case 'success': return 'ph-fill ph-check-circle';
+                default: return 'ph-fill ph-info';
+            }
+        };
+        return { getClasses, getIcon };
+    }
 };

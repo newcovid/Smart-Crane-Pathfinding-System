@@ -9,7 +9,8 @@ import {
     NumberInput,
     SelectInput,
     SectionGroup,
-    StatsPanel
+    StatsPanel,
+    NotificationToast
 } from './components/UIComponents.js';
 
 const socket = io();
@@ -24,7 +25,8 @@ const app = createApp({
         'number-input': NumberInput,
         'select-input': SelectInput,
         'section-group': SectionGroup,
-        'stats-panel': StatsPanel
+        'stats-panel': StatsPanel,
+        'notification-toast': NotificationToast
     },
 
     setup() {
@@ -53,7 +55,7 @@ const app = createApp({
             },
 
             mapState: {
-                width: 0, length: 0, height_m: 20, // [Fix] 初始化 height_m
+                width: 0, length: 0, height_m: 20,
                 static_obstacles: {}, dynamic_obstacles: {},
                 resolution: 0.5,
                 inflated_grid: null
@@ -79,6 +81,22 @@ const app = createApp({
             visuals: { showPathNodes: true, safetyMode: 'footprint' },
             logs: []
         });
+
+        // --- 通知系统 ---
+        const notifications = ref([]);
+
+        const notify = (type, message, title = '') => {
+            const id = Date.now() + Math.random();
+            notifications.value.push({ id, type, message, title });
+            const duration = type === 'error' ? 6000 : 4000;
+            setTimeout(() => {
+                removeNotification(id);
+            }, duration);
+        };
+
+        const removeNotification = (id) => {
+            notifications.value = notifications.value.filter(n => n.id !== id);
+        };
 
         // --- Layout Resizing Logic ---
         const startResizeSidebar = (e) => {
@@ -126,6 +144,13 @@ const app = createApp({
         // Error Boundary
         onErrorCaptured((err, instance, info) => {
             console.error('[Vue Error]', err, info);
+            let msg = '未知错误';
+            if (err) {
+                if (typeof err === 'string') msg = err;
+                else if (err.message) msg = err.message;
+            }
+            if (msg.includes('ResizeObserver loop')) return false;
+            notify('error', `${msg}`, '前端组件异常');
             return false;
         });
 
@@ -152,10 +177,12 @@ const app = createApp({
         socket.on('connect', () => {
             state.connection.connected = true;
             state.connection.statusText = '在线';
+            notify('info', '已成功连接到服务器。', '连接恢复');
         });
         socket.on('disconnect', () => {
             state.connection.connected = false;
             state.connection.statusText = '离线';
+            notify('error', '与服务器的连接已断开。', '连接丢失');
         });
         socket.on('pong', (ms) => { state.connection.latency = ms; });
 
@@ -163,7 +190,6 @@ const app = createApp({
             try {
                 state.mapState.width = d.width_m;
                 state.mapState.length = d.length_m;
-                // [Fix] 关键修复：同步 height_m，否则前端计算 3D 网格总数时会 NaN
                 state.mapState.height_m = d.height_m;
                 state.mapState.resolution = d.resolution_m;
                 state.mapState.static_obstacles = d.static_obstacles || {};
@@ -185,7 +211,13 @@ const app = createApp({
 
         socket.on('update_path', (p) => {
             try {
-                state.pathData = markRaw(p || []);
+                const safePath = (p || []).map(pt => {
+                    if (Array.isArray(pt) && pt.length >= 2) {
+                        return [Number(pt[0]) || 0, Number(pt[1]) || 0, Number(pt[2]) || 0];
+                    }
+                    return null;
+                }).filter(x => x !== null);
+                state.pathData = markRaw(safePath);
             } catch (e) {
                 console.error('[Path] Update Error:', e);
             }
@@ -199,7 +231,8 @@ const app = createApp({
             state.logs.push({ ...log, time: timeStr });
         });
 
-        socket.on('operation_failed', (d) => { alert('操作失败: ' + d.message); });
+        socket.on('operation_failed', (d) => { notify('error', d.message, '操作失败'); });
+        socket.on('operation_success', (d) => { notify('success', d.message, '操作成功'); });
 
         const applySettings = () => {
             socket.emit('update_settings', state.settings);
@@ -301,13 +334,15 @@ const app = createApp({
             if (socket.connected) {
                 state.connection.connected = true;
                 state.connection.statusText = '在线';
+                notify('info', '已成功连接到服务器。', '连接恢复');
             }
         });
 
         return {
             ...toRefs(state),
             toggleTheme, applySettings, requestPlan, handleMapClick, handleMapDrag, switchView,
-            startResizeSidebar, startResizeLog
+            startResizeSidebar, startResizeLog,
+            notifications, removeNotification
         };
     }
 });

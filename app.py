@@ -210,6 +210,7 @@ def handle_request_path(data: Dict[str, Any]):
         emit("update_path", path)
         emit("planning_stats", stats)
         logger.info(f"[Plan] 规划成功! 路径节点数: {len(path)}")
+        emit("operation_success", {"message": f"路径规划成功 ({len(path)} 节点)"})
     else:
         # 失败: 发送空路径(清空画布)和失败消息
         emit("update_path", [])
@@ -232,6 +233,7 @@ def handle_add_obstacle(data: Dict[str, Any]):
     if success:
         # 2. 如果成功，立即把新地图广播给所有人
         socketio.emit("update_map_state", crane_service.get_full_state())
+        emit("operation_success", {"message": f"已添加障碍物: {msg}"})
         logger.info("[Map] 障碍物添加成功，触发自动重规划 (Auto-Replan)...")
 
         # 3. 自动触发一次重规划
@@ -254,12 +256,14 @@ def handle_remove_obstacle(data: Dict[str, Any]):
     [事件] 移除障碍物。
     当用户使用"移除"工具点击地图时触发。
     """
+
     logger.info(f"[Map] 请求移除障碍物: 点击位置 ({data.get('x')}, {data.get('y')})")
 
     success, msg = crane_service.remove_obstacle_near(data)
 
     if success:
         socketio.emit("update_map_state", crane_service.get_full_state())
+        emit("operation_success", {"message": f"已移除障碍物: {msg}"})
         logger.info("[Map] 移除成功，触发自动重规划...")
 
         # 自动重规划
@@ -293,4 +297,4 @@ if __name__ == "__main__":
     # 启动 SocketIO 服务器
     # debug=True: 代码修改后自动重启，方便开发
     # host='0.0.0.0': 允许局域网内其他电脑访问
-    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=False)
