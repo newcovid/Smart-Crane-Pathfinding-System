@@ -5,12 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>智能起重机控制台 Pro</title>
     
-    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 0. 网站图标 -->
+    <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg">
+
+    <!-- 1. 本地化 Tailwind -->
+    <script src="/static/vendor/tailwindcss.js"></script>
+    
+    <!-- 2. 核心样式 & 字体 -->
     <link rel="stylesheet" href="/static/css/style.css">
     
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <!-- [新增] 本地化 Inter 字体 (顶级 UI 字体) -->
+    <link rel="stylesheet" href="/static/vendor/fonts/inter.css">
+    
+    <!-- 3. 本地化图标库 (Phosphor) -->
+    <link rel="stylesheet" href="/static/vendor/phosphor/regular.css">
+    <link rel="stylesheet" href="/static/vendor/phosphor/bold.css">
+    <link rel="stylesheet" href="/static/vendor/phosphor/fill.css">
+    
+    <!-- 4. 本地化 JS 库 -->
+    <script src="/static/vendor/socket.io.min.js"></script>
+    <script src="/static/vendor/vue.global.js"></script>
     
     <script>
         tailwind.config = { 
@@ -18,7 +32,11 @@
             theme: { 
                 extend: { 
                     colors: { primary: '#3b82f6', darkbg: '#0f172a', lightbg: '#f8fafc', success: '#10b981', danger: '#f43f5e' },
-                    fontFamily: { sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'], mono: ['JetBrains Mono', 'monospace'] },
+                    fontFamily: { 
+                        // [修改] 将 'Inter' 设为首选，并关联我们本地下载的字体
+                        sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'], 
+                        mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'] 
+                    },
                     animation: { 'fadeIn': 'fadeIn 0.3s ease-out forwards' },
                     keyframes: { fadeIn: { '0%': { opacity: '0', transform: 'translateY(-10px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } } }
                 } 
@@ -26,11 +44,12 @@
         }
     </script>
 
+    <!-- 5. Three.js Import Map -->
     <script type="importmap">
         {
             "imports": {
-                "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+                "three": "/static/vendor/three.module.js",
+                "three/addons/": "/static/vendor/three/examples/jsm/"
             }
         }
     </script>
@@ -40,26 +59,22 @@
     {% raw %}
     <div id="app" class="w-full h-full flex flex-col" v-cloak>
         
-        <!-- 全局通知组件 -->
         <notification-toast :notifications="notifications" @remove="removeNotification"></notification-toast>
-
-        <!-- 遮罩层 (拖拽时激活，防止 iframe 吃事件) -->
         <div v-if="ui.resizingSidebar || ui.resizingLog" class="resizing-overlay"></div>
 
-        <!-- 1. 顶栏 -->
+        <!-- Header -->
         <header class="h-14 bg-white dark:bg-[#161e2e] border-b border-slate-200 dark:border-slate-800 flex items-center justify-between px-5 shrink-0 z-30 relative shadow-sm transition-colors duration-300">
             <div class="flex items-center gap-3">
-                <div class="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-                    <i class="ph-bold ph-crane-tower text-lg"></i>
+                <div class="w-8 h-8 rounded-lg shadow-lg shadow-blue-500/20 overflow-hidden shrink-0">
+                    <img src="/static/img/favicon.svg" alt="Logo" class="w-full h-full object-cover">
                 </div>
                 <div class="flex flex-col">
                     <h1 class="font-bold text-sm tracking-wide text-slate-900 dark:text-white leading-none">CRANE <span class="text-primary">AI</span></h1>
-                    <span class="text-[9px] text-slate-400 font-medium tracking-widest mt-0.5 uppercase">Trajectory Planner V15.0</span>
+                    <span class="text-[9px] text-slate-400 font-medium tracking-widest mt-0.5 uppercase">智能寻路轨迹规划器</span>
                 </div>
             </div>
             
             <div class="flex items-center gap-4">
-                <!-- Status -->
                 <div class="flex items-center gap-2.5 text-[10px] font-mono bg-slate-50 dark:bg-slate-800/50 px-3 py-1.5 rounded border border-slate-200 dark:border-slate-700">
                    <span class="flex items-center gap-1.5 text-slate-600 dark:text-slate-300 font-bold">
                         <span class="relative flex h-2 w-2">
@@ -72,7 +87,6 @@
                     <span class="text-slate-400">{{ connection.latency }}ms</span>
                 </div>
 
-                <!-- View Mode -->
                 <div class="bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg flex gap-0.5">
                     <button @click="switchView('2d')" :class="ui.viewMode === '2d' ? 'bg-white dark:bg-[#1f2937] shadow-sm text-primary' : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-300'" class="px-3 py-1.5 rounded-md text-xs font-bold transition-all flex items-center gap-1.5">
                         <i class="ph-bold ph-square"></i> 2D
@@ -82,29 +96,25 @@
                     </button>
                 </div>
                 
-                <!-- Theme -->
                 <button @click="toggleTheme" class="w-8 h-8 rounded-lg bg-slate-50 dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center text-slate-500 transition-all border border-slate-200 dark:border-slate-700">
                     <i :class="isDark ? 'ph-bold ph-moon' : 'ph-bold ph-sun'" class="text-lg text-amber-500 dark:text-slate-400"></i>
                 </button>
             </div>
         </header>
 
-        <!-- 2. 主体内容区 -->
+        <!-- Body -->
         <div class="flex-1 flex overflow-hidden relative">
-            
-            <!-- 2.1 侧边栏 (Sidebar) - 动态宽度 -->
             <aside class="bg-slate-100 dark:bg-[#111827] border-r border-slate-200 dark:border-slate-800 flex flex-col z-20 shadow-2xl shadow-black/5 transition-colors duration-300"
                    :style="{ width: ui.sidebarWidth + 'px' }">
-                
                 <div class="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-3">
-                    <section-group title="交互工具箱" icon="ph-toolbox" :default-open="true">
+                    <section-group title="交互工具箱" icon="ph-bold ph-toolbox" :default-open="true">
                         <div class="grid grid-cols-3 gap-2 mb-2">
-                            <tool-btn icon="ph-hand-grabbing" label="浏览" value="view" v-model="interaction.mode"></tool-btn>
-                            <tool-btn icon="ph-flag-checkered" label="设起点" value="set_start" color="text-success" v-model="interaction.mode"></tool-btn>
-                            <tool-btn icon="ph-flag" label="设终点" value="set_end" color="text-danger" v-model="interaction.mode"></tool-btn>
-                            <tool-btn icon="ph-cube" label="静态物" value="add_static" v-model="interaction.mode"></tool-btn>
-                            <tool-btn icon="ph-truck" label="动态物" value="add_dynamic" color="text-orange-500" v-model="interaction.mode"></tool-btn>
-                            <tool-btn icon="ph-eraser" label="移除" value="remove" color="text-red-500" v-model="interaction.mode"></tool-btn>
+                            <tool-btn icon="ph-bold ph-hand-grabbing" label="浏览" value="view" v-model="interaction.mode"></tool-btn>
+                            <tool-btn icon="ph-bold ph-flag-checkered" label="设起点" value="set_start" color="text-success" v-model="interaction.mode"></tool-btn>
+                            <tool-btn icon="ph-bold ph-flag" label="设终点" value="set_end" color="text-danger" v-model="interaction.mode"></tool-btn>
+                            <tool-btn icon="ph-bold ph-cube" label="静态物" value="add_static" v-model="interaction.mode"></tool-btn>
+                            <tool-btn icon="ph-bold ph-truck" label="动态物" value="add_dynamic" color="text-orange-500" v-model="interaction.mode"></tool-btn>
+                            <tool-btn icon="ph-bold ph-eraser" label="移除" value="remove" color="text-red-500" v-model="interaction.mode"></tool-btn>
                         </div>
                         <div v-if="interaction.mode.startsWith('add_')" class="p-3 bg-blue-50 dark:bg-blue-500/10 rounded-lg border border-blue-200 dark:border-blue-500/20 animate-fadeIn">
                             <div class="text-[10px] font-bold text-blue-600 dark:text-blue-400 mb-2 flex items-center gap-1">
@@ -126,7 +136,7 @@
                         </div>
                     </section-group>
 
-                    <section-group title="场地尺寸配置" icon="ph-ruler">
+                    <section-group title="场地尺寸配置" icon="ph-bold ph-ruler">
                         <number-input label="场地长度 (Y)" v-model="settings.MAP_LENGTH_M" :step="5" unit="m"></number-input>
                         <number-input label="场地宽度 (X)" v-model="settings.MAP_WIDTH_M" :step="5" unit="m"></number-input>
                         <number-input label="场地高度 (Z)" v-model="settings.MAP_HEIGHT_M" :step="1" unit="m"></number-input>
@@ -137,7 +147,7 @@
                         </button>
                     </section-group>
 
-                    <section-group title="物理与安全策略" icon="ph-shield-check">
+                    <section-group title="物理与安全策略" icon="ph-bold ph-shield-check">
                         <select-input label="吊具形状" v-model="settings.CRANE_FOOTPRINT_SHAPE" :options="[{label: '矩形 (Box)', value: 'box'}, {label: '圆形 (Circle)', value: 'circle'}]"></select-input>
                         <div class="space-y-2 pt-1">
                             <number-input label="宽度/直径" v-model="settings.CRANE_FOOTPRINT_WIDTH" unit="m" :step="0.5"></number-input>
@@ -155,7 +165,7 @@
                         </div>
                     </section-group>
 
-                    <section-group title="路径算法核心" icon="ph-cpu">
+                    <section-group title="路径算法核心" icon="ph-bold ph-cpu">
                         <select-input label="规划核心" v-model="settings.PLANNER_ALGORITHM" :options="[{label: 'A* (全局最优)', value: 'astar'}, {label: 'D* Lite (动态增量)', value: 'dslite'}]"></select-input>
                         <toggle-switch label="3D Octile 距离" v-model="settings.USE_3D_OCTILE" subtext="启用对角线移动代价 (更精确)"></toggle-switch>
                         <div class="pt-1">
@@ -163,7 +173,7 @@
                         </div>
                     </section-group>
 
-                    <section-group title="轨迹后处理" icon="ph-Bezier-curve">
+                    <section-group title="轨迹后处理" icon="ph-bold ph-bezier-curve">
                         <toggle-switch label="捷径优化 (Greedy)" v-model="settings.ENABLE_SHORTCUT_OPTIMIZATION" subtext="消除网格锯齿，拉直路径"></toggle-switch>
                         <div class="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700/50">
                             <toggle-switch label="贝塞尔平滑 (Bezier)" v-model="settings.ENABLE_BEZIER_SMOOTHING"></toggle-switch>
@@ -174,7 +184,7 @@
                         </div>
                     </section-group>
 
-                    <section-group title="视觉显示设置" icon="ph-eye">
+                    <section-group title="视觉显示设置" icon="ph-bold ph-eye">
                         <div class="space-y-2">
                             <div class="text-[11px] text-slate-600 dark:text-slate-400 font-medium">安全包络显示</div>
                             <div class="flex bg-slate-100 dark:bg-slate-900/50 p-1 rounded">
@@ -204,39 +214,26 @@
                 </div>
             </aside>
 
-            <!-- 垂直分割条 -->
             <div class="resizer-vertical" @mousedown="startResizeSidebar" :class="{ 'resizing': ui.resizingSidebar }"></div>
 
-            <!-- 2.2 画布与日志区 -->
             <main class="flex-1 relative bg-slate-200 dark:bg-[#0b1120] overflow-hidden flex flex-col shadow-[inset_4px_0_15px_rgba(0,0,0,0.05)] transition-colors duration-300">
-                
-                <!-- Canvas -->
                 <div class="flex-1 relative overflow-hidden">
-                    <!-- [Optimization] 使用 v-show 替代 v-if，避免切换时销毁/重建组件，实现丝滑切换 -->
                     <canvas-2d v-show="ui.viewMode === '2d'" :map="mapState" :interaction="interaction" :path="pathData" :mission="missionState" :settings="settings" :visuals="visuals" :is-dark="isDark" :active="ui.viewMode === '2d'" @map-click="handleMapClick" @map-drag="handleMapDrag"></canvas-2d>
-                    
                     <canvas-3d v-show="ui.viewMode === '3d'" :map="mapState" :path="pathData" :mission="missionState" :visuals="visuals" :is-dark="isDark" :active="ui.viewMode === '3d'"></canvas-3d>
-                    
-                    <!-- 浮动性能面板 (使用 fixed 定位，不占用布局空间) -->
                     <stats-panel :stats="lastStats" :map-state="mapState" :settings="settings"></stats-panel>
                 </div>
 
-                <!-- 水平分割条 (仅当日志展开时显示/或始终显示但只在展开时有效) -->
                 <div v-if="ui.showLogs" class="resizer-horizontal" @mousedown="startResizeLog" :class="{ 'resizing': ui.resizingLog }"></div>
 
-                <!-- Log Panel (Height Dynamic) -->
                 <div class="shrink-0 relative z-20 transition-all duration-300 ease-in-out border-t border-slate-200 dark:border-slate-800 shadow-[0_-4px_30px_rgba(0,0,0,0.1)]"
                      :style="{ height: ui.showLogs ? ui.logHeight + 'px' : '32px' }">
-                    
                     <div v-if="ui.showLogs" class="h-full bg-white dark:bg-[#1e1e1e]">
                         <log-panel :logs="logs" @clear="logs = []" @close="ui.showLogs = false"></log-panel>
                     </div>
-                    
                     <button v-else @click="ui.showLogs = true" class="w-full h-full bg-white dark:bg-[#161e2e] hover:bg-slate-50 dark:hover:bg-[#1f2937] flex items-center justify-center text-xs text-slate-500 dark:text-slate-400 font-bold transition-colors gap-2 tracking-wide">
                         <i class="ph-bold ph-terminal-window"></i> 显示系统终端日志
                     </button>
                 </div>
-
             </main>
         </div>
     </div>
