@@ -17,7 +17,7 @@ except ImportError:
 
 # 导入核心组件
 from .map_manager import WorkshopMapManager
-from algorithms.trajectory_planner import TrajectoryPlanner
+from smart_crane.algorithms.trajectory_planner import TrajectoryPlanner
 
 
 class CraneService:

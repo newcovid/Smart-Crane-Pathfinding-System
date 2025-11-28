@@ -261,61 +261,66 @@ class WorkshopMapManager:
         """
         [真理层] 基于连续 3D 几何的精确碰撞检测。
 
-        这不是基于网格的近似检测，而是直接用数学公式判断一个点是否在长方体内。
-        它是"上帝视角"的裁判。
+        更新说明:
+        从"AABB包围盒检测"升级为"点到矩形的欧几里得距离检测"。
+        这允许安全区域在角落处呈现圆角 (Rounded Rectangle)，从而允许路径更贴近拐角，
+        极大地提高了捷径优化 (Greedy Shortcut) 的成功率。
 
         Args:
             x, y, z: 待检查点的物理坐标。
-            xy_margin: 水平安全距离 (膨胀半径)。
+            xy_margin: 水平安全距离 (膨胀半径)。通常是吊具的旋转半径。
             z_margin: 垂直安全距离。
-            ignore_z: 是否忽略高度 (用于 2D 模式或无限高障碍模式)。
+            ignore_z: 是否忽略高度。
 
         Returns:
             bool: True 表示**发生碰撞** (不安全)，False 表示安全。
         """
         # 1. 边界检测 (Wall Collision)
-        # 检查是否撞墙。我们假设墙壁是无限高的。
         if x - xy_margin < 0 or x + xy_margin > self.width_m:
-            return True  # 撞到左右墙壁
+            return True
         if y - xy_margin < 0 or y + xy_margin > self.length_m:
-            return True  # 撞到前后墙壁
+            return True
 
-        # 天花板检测 (可选)
         if z + z_margin > self.height_m or z - z_margin < 0:
             pass  # 暂时不处理天地碰撞
 
+        xy_margin_sq = xy_margin * xy_margin
+
         with self._lock:
-            # 合并所有障碍物列表
             all_obs = list(self.static_obstacles.values()) + list(
                 self.dynamic_obstacles.values()
             )
 
             for o in all_obs:
-                # AABB (Axis-Aligned Bounding Box) 碰撞检测算法
-                # 简单来说：如果 X轴投影重叠 且 Y轴投影重叠 且 Z轴投影重叠，那就是撞了
+                # --- 优化后的 XY 平面检测 (Rounded Corner Check) ---
+                # 寻找障碍物矩形上距离测试点 (x, y) 最近的点 (closest_x, closest_y)
+                obs_min_x, obs_max_x = o["x_m"], o["x_m"] + o["w_m"]
+                obs_min_y, obs_max_y = o["y_m"], o["y_m"] + o["h_m"]
 
-                # 1. 检查 X 轴重叠
-                if not (
-                    x + xy_margin > o["x_m"] and x - xy_margin < o["x_m"] + o["w_m"]
-                ):
-                    continue  # X轴没碰到，这俩物体没关系，检查下一个
+                # Clamp 函数：把点拉回到矩形范围内
+                closest_x = max(obs_min_x, min(x, obs_max_x))
+                closest_y = max(obs_min_y, min(y, obs_max_y))
 
-                # 2. 检查 Y 轴重叠
-                if not (
-                    y + xy_margin > o["y_m"] and y - xy_margin < o["y_m"] + o["h_m"]
-                ):
-                    continue  # Y轴没碰到
+                # 计算距离平方
+                dist_x = x - closest_x
+                dist_y = y - closest_y
+                dist_sq = dist_x * dist_x + dist_y * dist_y
 
-                # 3. 检查 Z 轴重叠 (如果需要)
-                if ignore_z:
-                    return True  # 忽略高度，只要 XY 撞了就算撞了
+                # 如果点在障碍物内部，dist_sq 为 0。
+                # 碰撞条件: 距离 < 安全半径
+                if dist_sq < xy_margin_sq:
+                    # XY 平面发生碰撞 (或处于危险半径内)
 
-                # 获取障碍物高度 (默认为 100米，即无限高)
-                obs_z = o.get("z_m", 100.0)
-                if z - z_margin <= obs_z:
-                    return True
+                    # 如果忽略 Z 轴，直接判定为撞车
+                    if ignore_z:
+                        return True
 
-            return False  # 检查完所有障碍物都没撞，安全！
+                    # 否则检查 Z 轴高度
+                    obs_z = o.get("z_m", 100.0)
+                    if z - z_margin <= obs_z:
+                        return True
+
+            return False  # 安全
 
     # =========================================================================
     # 4. 网格生成与处理 (Grid Generation & Inflation)
@@ -429,8 +434,14 @@ class WorkshopMapManager:
 
             for o in all_obs:
                 r_s, c_s, _ = self.world_to_grid(o["x_m"], o["y_m"])
+
+                # [修复] 精度边界处理
+                # 问题描述: 在2D投影逻辑(_mark_obstacle_area)中，我们使用了 -0.01 的偏移量
+                # 来处理正好落在网格线上的坐标。但在原先的 3D 逻辑中缺少这个偏移，导致 3D 障碍物
+                # 往往比 2D 障碍物多占一格(0.5m)。对于窄路，这一格就是致命的。
+                # 修复: 引入 -1e-4 的 epsilon，保持与 2D 逻辑一致。
                 r_e, c_e, _ = self.world_to_grid(
-                    o["x_m"] + o["w_m"], o["y_m"] + o["h_m"]
+                    o["x_m"] + o["w_m"] - 1e-4, o["y_m"] + o["h_m"] - 1e-4
                 )
 
                 # 确定障碍物的"阻挡高度"
@@ -439,6 +450,11 @@ class WorkshopMapManager:
                 else:
                     obs_occupy_z = o.get("z_m", 100.0) + z_margin_obs
 
+                # [修复] 范围切片逻辑修正
+                # Python 的 slice 是左闭右开的 (start:end 不包含 end)。
+                # world_to_grid 返回的是索引。
+                # 如果 r_s=0, r_e=1 (跨度2格)，我们希望填 0 和 1。
+                # 原逻辑: r_e + 1 -> 2. height_map[0:2] -> 填 0, 1。正确。
                 r_s, r_e = max(0, r_s), min(self.rows, r_e + 1)
                 c_s, c_e = max(0, c_s), min(self.cols, c_e + 1)
 
@@ -450,10 +466,20 @@ class WorkshopMapManager:
 
             # 2. 高度图膨胀 (XY Plane Inflation)
             if xy_margin > 0:
-                radius = int(math.ceil(xy_margin))
+                # [核心修正] 膨胀卷积核半径补偿
+                # 问题: 原逻辑 `radius = ceil(xy_margin)` 并直接用作 mask 半径。
+                # EDT 计算的是中心到中心的距离，而安全碰撞需要计算边缘到中心的距离。
+                # 差值为 0.5 个格子。
+                # 修复: 在 mask 计算中引入 +0.5 的补偿。
+                search_radius = int(math.ceil(xy_margin + 0.5))
+
                 # 创建卷积核 (圆形)
-                y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
-                mask = x**2 + y**2 <= xy_margin**2
+                y, x = np.ogrid[
+                    -search_radius : search_radius + 1,
+                    -search_radius : search_radius + 1,
+                ]
+                # 判定条件: 距离 <= (安全半径 + 0.5格补偿)
+                mask = x**2 + y**2 <= (xy_margin + 0.5) ** 2
 
                 # 使用 maximum_filter 让柱子变粗
                 height_map = maximum_filter(
@@ -506,14 +532,24 @@ def _create_inflated_grid_2d(grid: Grid2D, safety_margin: float) -> Grid2D:
         )
 
         # 计算距离场: 算出每个点距离最近障碍物的距离
+        # 距离单位: 格子数 (float)
+        # 注意: EDT 计算的是 "当前点中心" 到 "障碍物点中心" 的欧氏距离
         feature_mask = (np_grid_padded == 0).astype(int)
         dist_map = distance_transform_edt(feature_mask)
 
         # 切掉 Padding，还原大小
         dist_map = dist_map[1:-1, 1:-1]
 
-        # 距离小于安全距离的地方，都标记为障碍
-        inflated_np = (dist_map <= safety_margin).astype(int)
+        # [核心修正] 膨胀阈值补偿 (+0.5 Grid)
+        # 现象: 分辨率越粗，障碍物边缘的不确定性越大。
+        # 原逻辑: dist <= safety_margin
+        # 问题: 假设 safety_margin=0.8, 相邻格距离=1.0。1.0 > 0.8 -> 安全。
+        #       但物理上，障碍物占据了半个格子，实际净空 = 1.0 - 0.5 = 0.5。
+        #       0.5 < 0.8 -> 应该是不安全的！
+        # 修复: 判定距离 <= (安全半径 + 0.5格补偿)
+        # 效果: 强制保证物理上的边缘净空满足要求，无论分辨率多粗。
+        #       这将解决"分辨率1.0时路径存在，0.1时路径消失"的假阴性问题。
+        inflated_np = (dist_map <= (safety_margin + 0.5)).astype(int)
         inflated_np = np.maximum(inflated_np, np_grid)
         return inflated_np.tolist()
 

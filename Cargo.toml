@@ -1,0 +1,19 @@
+[package]
+name = "smart_crane_core"
+version = "0.1.0"
+edition = "2021"
+
+# 生成动态链接库供 Python 调用
+[lib]
+name = "smart_crane_core"
+crate-type = ["cdylib"]
+
+[dependencies]
+# PyO3 用于 Python 绑定
+pyo3 = { version = "0.23", features = ["extension-module"] }
+
+# 社区成熟的寻路算法库
+pathfinding = "4.9"
+
+# 用于处理浮点数哈希（A* 需要 Eq/Hash trait）
+ordered-float = "4.0"

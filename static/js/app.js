@@ -46,6 +46,8 @@ const app = createApp({
                 OBSTACLE_INFINITE_HEIGHT: true,
                 DEFAULT_OBSTACLE_HEIGHT_M: 2.0,
                 PLANNER_ALGORITHM: 'astar',
+                // [新增] Rust 加速开关默认开启
+                ENABLE_RUST_CORE: true,
                 USE_3D_OCTILE: false,
                 ENABLE_SHORTCUT_OPTIMIZATION: true,
                 ENABLE_BEZIER_SMOOTHING: true,
@@ -86,8 +88,17 @@ const app = createApp({
         const notifications = ref([]);
 
         const notify = (type, message, title = '') => {
+            // [优化] 限制最大弹窗数量为 4 条
+            if (notifications.value.length >= 4) {
+                // 移除最旧的一条
+                notifications.value.shift();
+            }
+
             const id = Date.now() + Math.random();
-            notifications.value.push({ id, type, message, title });
+            // [New] 生成当前时间 HH:mm:ss
+            const time = new Date().toLocaleTimeString('en-GB', { hour12: false });
+
+            notifications.value.push({ id, type, message, title, time });
             const duration = type === 'error' ? 6000 : 4000;
             setTimeout(() => {
                 removeNotification(id);
@@ -146,8 +157,8 @@ const app = createApp({
             console.error('[Vue Error]', err, info);
             let msg = '未知错误';
             if (err) {
-                if (typeof err === 'string') msg = err;
-                else if (err.message) msg = err.message;
+                if (err.message) msg = err.message;
+                else if (typeof err === 'string') msg = err;
             }
             if (msg.includes('ResizeObserver loop')) return false;
             notify('error', `${msg}`, '前端组件异常');
@@ -266,8 +277,14 @@ const app = createApp({
                     const s = state.interaction.startPos;
                     let w = snap(Math.abs(pos.x - s.x));
                     let h = snap(Math.abs(pos.y - s.y));
-                    if (w < 0.1) w = state.mapState.resolution * 2 || 1;
-                    if (h < 0.1) h = state.mapState.resolution * 2 || 1;
+
+                    // [修改] 优化拖拽结束后的最小尺寸判定
+                    // 原逻辑为 resolution * 2 (强制 2x2)，现改为 resolution (允许 1x1)
+                    // 使用 || 0.5 防止 resolution 未加载时出错
+                    const minRes = state.mapState.resolution || 0.5;
+
+                    if (w < minRes / 2) w = minRes;
+                    if (h < minRes / 2) h = minRes;
 
                     const type = mode === 'add_static' ? 'static' : 'dynamic';
                     const finalX = Math.min(s.x, pos.x);
@@ -306,9 +323,15 @@ const app = createApp({
                 const c = { x: cx, y: cy };
 
                 if (e.setPreview) {
+                    // [修改] 优化拖拽时的视觉反馈
+                    // 将默认预览尺寸从硬编码的 1 改为当前网格分辨率
+                    // 这样拖拽初期显示的框体大小就和网格完全对齐，手感更"跟手"
+                    const minRes = state.mapState.resolution || 0.5;
+
                     e.setPreview({
                         x: Math.min(s.x, c.x), y: Math.min(s.y, c.y),
-                        w: Math.abs(c.x - s.x) || 1, h: Math.abs(c.y - s.y) || 1
+                        w: Math.abs(c.x - s.x) || minRes,
+                        h: Math.abs(c.y - s.y) || minRes
                     });
                 }
             }

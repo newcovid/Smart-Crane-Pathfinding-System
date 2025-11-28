@@ -90,3 +90,17 @@ lcov-report/
 
 # Misc
 *.egg-info/
+
+# Project-specific
+# Rust / Cargo build artifacts
+/target/
+**/target/
+target/**
+
+# Compiled artifacts (Windows/Rust)
+*.exe
+*.rlib
+*.pdb
+
+# Dependency/temp files produced during Rust builds
+*.d

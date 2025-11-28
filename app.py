@@ -20,8 +20,8 @@ from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
 
 # 导入我们的核心业务逻辑
-from core.config import Config
-from core.crane_service import CraneService
+from smart_crane.core.config import Config
+from smart_crane.core.crane_service import CraneService
 
 
 # ==============================================================================

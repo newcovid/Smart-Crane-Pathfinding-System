@@ -355,8 +355,8 @@ export const NotificationToast = {
     props: ['notifications'],
     emits: ['remove'],
     template: `
-    <!-- [Change] 定位调整至右下角 (bottom-8 right-8) -->
-    <div class="fixed bottom-8 right-8 z-[100] flex flex-col gap-2 w-80 pointer-events-none">
+    <!-- [Change] 层级调整: 从 z-[100] 降为 z-40，确保在 z-50 的统计面板之下 -->
+    <div class="fixed bottom-8 right-8 z-40 flex flex-col gap-2 w-80 pointer-events-none">
         <transition-group name="toast" tag="div" class="flex flex-col gap-2">
             <div v-for="note in notifications" :key="note.id"
                  class="pointer-events-auto flex items-start gap-3 p-3.5 rounded-xl shadow-xl border backdrop-blur-md transition-all transform select-none"
@@ -369,7 +369,11 @@ export const NotificationToast = {
                 
                 <!-- Content -->
                 <div class="flex-1 min-w-0">
-                    <h4 v-if="note.title" class="text-sm font-bold opacity-95 mb-0.5 leading-none">{{ note.title }}</h4>
+                    <div class="flex justify-between items-start">
+                        <h4 v-if="note.title" class="text-sm font-bold opacity-95 mb-0.5 leading-none">{{ note.title }}</h4>
+                        <!-- [New] 时间戳显示 -->
+                        <span class="text-[10px] opacity-60 font-mono ml-2 shrink-0">{{ note.time }}</span>
+                    </div>
                     <p class="text-xs leading-normal opacity-85 font-medium break-words">{{ note.message }}</p>
                 </div>
 

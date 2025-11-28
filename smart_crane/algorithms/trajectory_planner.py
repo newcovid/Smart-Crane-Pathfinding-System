@@ -5,13 +5,13 @@ import threading
 from typing import List, Tuple, Dict, Any, Optional, Callable, Union
 
 # 引入核心组件
-from core.map_manager import WorkshopMapManager
-from algorithms.base import PathPlannerBase
-from algorithms.astar import AStarPlanner
-from algorithms.dslite import DLitePlanner
-from algorithms.post_processing.base import PathPostProcessor
-from algorithms.post_processing.greedy import GreedyShortcutProcessor
-from algorithms.post_processing.bezier import BezierSmoothProcessor
+from smart_crane.core.map_manager import WorkshopMapManager
+from smart_crane.algorithms.pathfinding.base import PathPlannerBase
+from smart_crane.algorithms.pathfinding.astar import AStarPlanner
+from smart_crane.algorithms.pathfinding.dslite import DLitePlanner
+from smart_crane.algorithms.post_processing.base import PathPostProcessor
+from smart_crane.algorithms.post_processing.greedy import GreedyShortcutProcessor
+from smart_crane.algorithms.post_processing.bezier import BezierSmoothProcessor
 
 # 定义类型别名，方便阅读
 # 3D 坐标: (x, y, z) 浮点数
@@ -84,6 +84,9 @@ class TrajectoryPlanner:
             use_octile = self.config.get("USE_3D_OCTILE", False)  # 距离计算方式
             h_weight = self.config.get("HEURISTIC_WEIGHT", 1.5)  # 启发式权重
 
+            # [新增] 读取 Rust 加速开关
+            enable_rust = self.config.get("ENABLE_RUST_CORE", True)
+
             # 2. 准备网格数据 (这是最耗时的一步，涉及到地图膨胀)
             # plan_grid: 给算法跑路用的 (如果是 2D 模式，这就是个 2D 数组)
             # vis_grid: 给前端画图用的
@@ -110,12 +113,14 @@ class TrajectoryPlanner:
             if algo_type == "dslite":
                 self.core_planner = DLitePlanner(**common_args)
             else:
-                self.core_planner = AStarPlanner(**common_args)
+                # [新增] 传递 enable_rust 参数给 A* 规划器
+                self.core_planner = AStarPlanner(**common_args, enable_rust=enable_rust)
 
             # 5. 组装后处理流水线
             self.post_processors = []
 
             # 5.1 捷径优化 (Greedy Shortcut) - 把折线拉直
+            # TODO: 未来可在此处根据 enable_rust 选择 Rust 版优化器
             if self.config.get("ENABLE_SHORTCUT_OPTIMIZATION", True):
                 self.post_processors.append(GreedyShortcutProcessor())
 
@@ -130,6 +135,7 @@ class TrajectoryPlanner:
 
             self.logger.info(
                 f"[TrajPlanner] 核心重构完成: 算法={algo_type.upper()}, "
+                f"Rust加速={'ON' if enable_rust else 'OFF'}, "
                 f"无限高模式={self.config.get('OBSTACLE_INFINITE_HEIGHT')}, "
                 f"优化器数量={len(self.post_processors)}"
             )
@@ -219,6 +225,7 @@ class TrajectoryPlanner:
         # 影响算法行为的参数 (需要重置算法实例)
         keys_affecting_algo = [
             "PLANNER_ALGORITHM",
+            "ENABLE_RUST_CORE",  # [新增] 监听 Rust 开关变化
             "USE_3D_OCTILE",
             "HEURISTIC_WEIGHT",
             "ENABLE_SHORTCUT",
@@ -260,6 +267,7 @@ class TrajectoryPlanner:
             self.visualization_grid = vis_grid
 
             # 将新的网格引用赋予核心规划器
+            # 注意：AStarPlanner (Python版) 会在这里通过 setter 自动同步给 Rust (如果启用了 Rust)
             self.core_planner.grid = plan_grid
 
             # 2. 如果是 D* Lite，它支持增量更新 (Incremental Update)
@@ -786,12 +794,31 @@ class TrajectoryPlanner:
             grace_start, grace_end: 豁免点。
             在路径优化时，起点和终点本身可能在膨胀层边缘，如果不豁免，射线检测第一步就会失败。
         """
-        radius = self.config.get("CRANE_FOOTPRINT_WIDTH", 5.0) / 2.0
+        # [修复] 统一安全校验标准
+        # 原代码: radius = width / 2.0 (仅考虑平移AABB，忽略旋转)
+        # 现代码: 使用与网格生成 (_prepare_grids) 相同的对角线逻辑
+        # 目的: 确保平滑后的路径不会切入"旋转安全区" (膨胀层)，消除视觉上的穿模。
+        cfg = self.config
+        shape = cfg.get("CRANE_FOOTPRINT_SHAPE", "box")
+        w = cfg.get("CRANE_FOOTPRINT_WIDTH", 5.0)
+        l = cfg.get("CRANE_FOOTPRINT_LENGTH", 5.0)
+
+        # 与 prepare_grids 保持完全一致的计算
+        radius = (w / 2.0) if shape == "circle" else (math.hypot(w, l) / 2.0)
+
+        # [新增] 视觉一致性缓冲 (Visual Consistency Buffer)
+        # 在 map_manager._create_inflated_grid_2d 中，我们引入了 +0.5 格的膨胀补偿
+        # 来解决栅格化带来的假阴性问题。
+        # 为了让贝塞尔平滑后的路径在视觉上不穿过这些红色网格，
+        # 我们需要在连续碰撞检测中也加入这 0.5 格的缓冲距离。
+        # 否则，路径虽然物理上没撞 (dist > R)，但可能穿过了被标记为红色的格子边缘 (dist < R + 0.5res)。
+        radius += self.map_mgr.resolution_m / 2.0
+
         z_margin = (
-            self.config.get("CRANE_Z_SAFETY_MARGIN", 0.5)
-            + self.config.get("CRANE_FOOTPRINT_HEIGHT", 2.0) / 2.0
+            cfg.get("CRANE_Z_SAFETY_MARGIN", 0.5)
+            + cfg.get("CRANE_FOOTPRINT_HEIGHT", 2.0) / 2.0
         )
-        is_infinite = self.config.get("OBSTACLE_INFINITE_HEIGHT", True)
+        is_infinite = cfg.get("OBSTACLE_INFINITE_HEIGHT", True)
 
         def check(pt: Tuple[float, ...]) -> bool:
             # 1. 豁免检查 (如果在起点/终点附近 0.5m 内，直接放行)

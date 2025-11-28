@@ -19,7 +19,7 @@ class Config:
     # 1. 基础与网络配置
     # =========================================================================
     SECRET_KEY: str = os.environ.get("SECRET_KEY", "dev_secret_key_123")
-    LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "DEBUG")
+    LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")
 
     # =========================================================================
     # 2. 车间物理环境 (Physics & Map)
@@ -75,6 +75,13 @@ class Config:
 
     # 核心规划器: 'astar' (全局最优) 或 'dslite' (动态增量)
     PLANNER_ALGORITHM: str = os.environ.get("PLANNER_ALGORITHM", "dslite").lower()
+
+    # 性能加速开关
+    # True: 优先使用 Rust 编写的高性能核心 (smart_crane_core)
+    # False: 强制使用 Python 原生实现 (用于 Debug 或 性能对比)
+    ENABLE_RUST_CORE: bool = (
+        os.environ.get("ENABLE_RUST_CORE", "True").lower() == "true"
+    )
 
     # 启发式距离: True=Octile(8邻域/26邻域), False=Euclidean(欧氏距离)
     USE_3D_OCTILE: bool = os.environ.get("USE_3D_OCTILE", "False").lower() == "true"
