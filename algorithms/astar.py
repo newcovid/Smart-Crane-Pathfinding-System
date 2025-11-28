@@ -6,6 +6,13 @@ from typing import List, Tuple, Dict, Optional, Set, Union, Any
 # 导入基类和类型定义
 from .base import PathPlannerBase, NodeType
 
+# --- 全局常量定义 ---
+# 浮点数比较容差 (Epsilon)
+# 用于判断两个浮点数是否"相等"或比较大小，解决计算机浮点数精度丢失问题。
+EPSILON = 1e-4
+# 无穷大常量
+INF = float("inf")
+
 
 class AStarPlanner(PathPlannerBase[NodeType]):
     """
@@ -92,6 +99,11 @@ class AStarPlanner(PathPlannerBase[NodeType]):
         Returns:
             bool: 如果起终点有效返回 True，否则 False。
         """
+        # 基础非空检查
+        if start is None or goal is None:
+            self.logger.error("[A* Init] 初始化失败: 起点或终点为 None。")
+            return False
+
         # 1. 检查坐标是否越界 (Out of Bounds)
         if not self.is_valid(start):
             self.logger.error(f"[A* Init] 初始化失败: 起点 {start} 超出地图边界。")
@@ -169,7 +181,7 @@ class AStarPlanner(PathPlannerBase[NodeType]):
         came_from: Dict[NodeType, NodeType] = {}
 
         # G值表 (G Score): 从起点到当前节点的已知最小代价。
-        # 默认值为无穷大 (float('inf'))
+        # 默认值为无穷大常量 INF
         g_score: Dict[NodeType, float] = {start_node: 0.0}
 
         # 开放列表哈希表 (Open Set Hash): 用于 O(1) 快速检查节点是否在 open_set 中。
@@ -220,7 +232,8 @@ class AStarPlanner(PathPlannerBase[NodeType]):
                 tentative_g = g_score[current] + move_cost
 
                 # 如果这条路径比已知到达该邻居的路径更短 (Relaxation / 松弛操作)
-                if tentative_g < g_score.get(neighbor, float("inf")):
+                # 使用 EPSILON 进行浮点数比较，确保数值稳定性
+                if tentative_g < g_score.get(neighbor, INF) - EPSILON:
                     # 更新记录
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g
@@ -303,7 +316,8 @@ class AStarPlanner(PathPlannerBase[NodeType]):
 
         if dims == 2:
             # --- 2D 邻居生成 (8邻域) ---
-            r, c = node  # type: ignore
+            # 强制转换坐标为 int，防止 float 坐标传入导致索引错误
+            r, c = int(node[0]), int(node[1])
             # 8个方向的偏移量和基础代价
             moves = [
                 (0, 1, self.COST_1),  # 右
@@ -332,7 +346,8 @@ class AStarPlanner(PathPlannerBase[NodeType]):
                 neighbors.append(((nr, nc), cost))  # type: ignore
         else:
             # --- 3D 邻居生成 (26邻域) ---
-            x, y, z = node  # type: ignore
+            # 强制转换坐标为 int，防止 float 坐标传入导致索引错误
+            x, y, z = int(node[0]), int(node[1]), int(node[2])
             # 遍历 x, y, z 三个维度的 -1, 0, 1 偏移
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
@@ -382,10 +397,24 @@ class AStarPlanner(PathPlannerBase[NodeType]):
             List[NodeType]: 从起点到终点的正序路径。
         """
         path = [current]
+
+        # 设置最大回溯步数，防止因数据结构异常导致的死循环
+        # 使用 came_from 的大小作为合理上限的参考
+        max_steps = len(came_from) + 100
+        steps = 0
+
         # 不断查找父节点，直到回溯到起点 (起点不在 came_from 中)
         while current in came_from:
             current = came_from[current]
             path.append(current)
+
+            # 死循环检查
+            steps += 1
+            if steps > max_steps:
+                self.logger.error(
+                    "[A* Path] 严重错误: 路径重建检测到死循环，强制截断。"
+                )
+                break
 
         # 翻转路径，使其变为 Start -> Goal
         return path[::-1]

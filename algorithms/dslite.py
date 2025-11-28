@@ -134,7 +134,11 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         # --- 动态阈值配置 ---
 
         # 估算体素总数
-        total_voxels = max(1000, self.rows * self.cols * max(1, self.layers))
+        # 确保行列层为整数，防止 float 计算导致 total_voxels 异常
+        rows_int = int(self.rows) if self.rows else 100
+        cols_int = int(self.cols) if self.cols else 100
+        layers_int = int(self.layers) if self.layers else 1
+        total_voxels = max(1000, rows_int * cols_int * max(1, layers_int))
 
         # 最大迭代次数，防止死循环 (Safety Brake)
         self.max_iter_limit = total_voxels * 20
@@ -157,7 +161,7 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         self.logger.info(
             f"[D* Lite Init] 初始化就绪. "
             f"启发式权重 (Heuristic Weight)={self.heuristic_weight:.2f}, "
-            f"地图尺寸 (Map Size)={self.rows}x{self.cols}x{self.layers}"
+            f"地图尺寸 (Map Size)={rows_int}x{cols_int}x{layers_int}"
         )
 
     def _reset_stats(self):
@@ -183,6 +187,19 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         if start is None or goal is None:
             self.logger.warning("[D* Init] ❌ 失败: 起点或终点为 None。")
             return False
+
+        # 快速检查起点终点重合
+        if start == goal:
+            self.logger.info("[D* Init] 起点与终点重合，无需规划。")
+            self.start_node = start
+            self.goal_node = goal
+            # 伪造一个简单的状态以便 _compute_path_core 能返回路径
+            self.g.clear()
+            self.rhs.clear()
+            self.g[start] = 0.0
+            self.rhs[start] = 0.0
+            return True
+
         if not self.is_valid(start):
             self.logger.error(f"[D* Init] ❌ 失败: 起点 {start} 越界。")
             return False
@@ -261,6 +278,7 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         for change in changes:
             # 提取坐标 (切片去掉最后一个 value)
             coords = change[:-1]
+            # 确保坐标为元组
             u: NodeType = tuple(coords)  # type: ignore
 
             if not self.is_valid(u):
@@ -304,6 +322,10 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         """
         if not self.goal_node:
             return None
+
+        # 起点终点重合直接返回
+        if current_pos == self.goal_node:
+            return [current_pos]
 
         # --- 1. 位置同步与 Km 更新 ---
         if current_pos != self.last_start_node:
@@ -361,7 +383,7 @@ class DLitePlanner(PathPlannerBase[NodeType]):
             min_cost = INF
             best_next = None
 
-            # [Debug Log] 收集邻居详情，用于诊断死循环
+            # Debug Log 收集邻居详情，用于诊断死循环
             debug_neighbors_info = []
 
             # 遍历邻居，寻找 Cost = c(curr, next) + g(next) 最小的节点
@@ -380,9 +402,12 @@ class DLitePlanner(PathPlannerBase[NodeType]):
                         f"{neighbor}[LOOP]:g={g_n:.2f},c={c:.2f}"
                     )
 
-                if c < min_cost:
+                # 浮点比较建议使用 EPSILON，防止两点代价极度接近时反复跳跃
+                if c < min_cost - EPSILON:
                     min_cost = c
                     best_next = neighbor
+                # 如果没有找到显著更优的，但正好等于 min_cost (或者在误差范围内)，
+                # 则保持现有的 best_next (通常第一个找到的就行)，避免抖动。
 
             # [详细日志] 打印前几步的决策过程
             if len(path) < 10:
@@ -575,6 +600,9 @@ class DLitePlanner(PathPlannerBase[NodeType]):
             k_new = calc_key(u)
 
             # 情况 A: 节点的 Key 已经过时 (例如 km 变化导致)
+            # Key 是元组，Python 的元组比较是逐元严格比较。
+            # D* Lite 中这里判断的是 k_old 是否小于 k_new。
+            # 如果 k_old < k_new，说明在等待处理期间，节点的优先级降低了（代价变大了），需要重新入队。
             if k_old < k_new:
                 self._insert_to_open(u, k_new)
                 continue
@@ -584,7 +612,8 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
             # 情况 B: Overconsistent (g > rhs)
             # 意味着发现了一条更短的路径 (通常是障碍物移除或初次搜索)
-            if g_u > rhs_u:
+            # 显式使用 EPSILON 防止浮点相等被误判为 >
+            if g_u > rhs_u + EPSILON:
                 # 1. 让 g 逼近 rhs (变小)
                 if u in self.open_keys:
                     del self.open_keys[u]
@@ -602,7 +631,8 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
             # 情况 C: Underconsistent (g < rhs)
             # 意味着路径被阻断 (g 值偏低，是无效的旧值)，或者节点本身变成了障碍物
-            else:
+            # 显式处理 < 状态
+            elif g_u < rhs_u - EPSILON:
                 # 1. 强制将 g 重置为 INF (清理旧状态)
                 self.g[u] = INF
                 self._update_vertex(
@@ -620,6 +650,15 @@ class DLitePlanner(PathPlannerBase[NodeType]):
                         continue
                     self._update_vertex(s)
 
+            else:
+                # 剩下的是 abs(g-rhs) <= EPSILON 的情况。
+                # 理论上这些节点不应该在 U 中被处理（它们是一致的），
+                # 但由于 Lazy Removal 或浮点误差可能到达这里。
+                # 视为一致，清理索引，不做任何操作。
+                if u in self.open_keys:
+                    del self.open_keys[u]
+                continue
+
         # 堆空了
         self.stats["nodes_expanded"] = (
             self.stats.get("nodes_expanded", 0) + current_expansion
@@ -628,7 +667,7 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
     def _heuristic_inline(self, a: Optional[NodeType], b: Optional[NodeType]) -> float:
         """
-        [辅助] 启发式函数计算 (H值)。
+        启发式函数计算 (H值)。
         根据模式选择 Euclidean (欧氏) 或 Octile (八方向/二十六方向) 距离。
         """
         if not a or not b:
@@ -660,13 +699,14 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
     def _get_neighbors(self, node: NodeType) -> List[Tuple[NodeType, float]]:
         """
-        [辅助] 获取合法邻居。
+        获取合法邻居。
         包含: 越界检查、障碍物检查、3D切角检查。
         """
         res = []
         # --- 3D 邻居生成 (26 邻域) ---
         if len(node) == 3:
-            x, y, z = node  # type: ignore
+            # 强制转换为 int，防止外部传入 float 坐标导致数组索引错误
+            x, y, z = int(node[0]), int(node[1]), int(node[2])
             for dx in (-1, 0, 1):
                 for dy in (-1, 0, 1):
                     for dz in (-1, 0, 1):
@@ -730,7 +770,8 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
         # --- 2D 邻居生成 (8 邻域) ---
         else:
-            r, c = node  # type: ignore
+            # 强制转换为 int，防止外部传入 float 坐标导致数组索引错误
+            r, c = int(node[0]), int(node[1])
             moves = [
                 (0, 1, self.COST_1),
                 (0, -1, self.COST_1),
