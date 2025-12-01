@@ -1,13 +1,26 @@
+# ==============================================================================
+# app.py
+# 智能起重机路径规划系统主入口
+#
+# 本模块负责：
+# 1. 初始化 Flask 应用与 SocketIO
+# 2. 配置高保真日志系统（含 WebSocket 实时推送）
+# 3. 注册 HTTP 路由与 SocketIO 事件
+# 4. 实例化核心业务服务
+# ==============================================================================
+
 import eventlet
 
-# 必须在导入其他库之前打补丁，以支持协程
-eventlet.monkey_patch()
+eventlet.monkey_patch()  # 必须在导入其他库之前打补丁，以支持协程
+
 
 import logging
 from typing import Dict, Any, Optional
 
+
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
+
 
 from smart_crane.core.config import settings
 from smart_crane.core.crane_service import CraneService
@@ -15,69 +28,60 @@ from smart_crane.core.constants import MSG_PLAN_SUCCESS, MSG_PLAN_FAIL
 
 
 # ==============================================================================
-# 1. 自定义智能日志系统
+# 1. 自定义智能日志系统 (Smart Logging System)
 # ==============================================================================
+
+
 class SmartLogFormatter(logging.Formatter):
     """
-    【智能日志格式化器】
+    高保真日志格式化器。
 
-    功能：
-    1. 自动对齐：确保日志等级和名称列宽固定，视觉整洁。
-    2. 智能缩写：支持无限嵌套的 Logger 名称显示。
-       当名称过长时，优先保留最具体的末尾部分（组件名）。
+    特性：
+      1. 忠实还原：不缩写、不替换，完整保留包名与模块名。
+      2. 视觉对齐：采用宽列+左对齐，分隔符 '|' 垂直对齐。
+
+    Attributes:
+        width_level (int): 日志等级字段宽度。
+        width_name (int): 模块名字段宽度。
     """
 
-    def __init__(self, fmt: Optional[str] = None, datefmt: Optional[str] = None):
+    width_level: int
+    width_name: int
+
+    def __init__(
+        self, fmt: Optional[str] = None, datefmt: Optional[str] = None
+    ) -> None:
         super().__init__(fmt, datefmt)
-        self.width_level = 6
-        # 增加宽度以容纳常见的嵌套层级 (例如 "Planner.Grid")
-        self.width_name = 24
-
-    def _smart_truncate_name(self, name: str, max_width: int) -> str:
-        """智能缩短日志名称算法。
-
-        Args:
-            name: 原始 Logger 名称 (如 "TrajectoryPlanner.GridAdapter")
-            max_width: 最大允许显示宽度
-
-        Returns:
-            str: 缩写后的名称
-        """
-        if len(name) <= max_width:
-            return name
-
-        parts = name.split(".")
-
-        # 策略1：尝试只保留父级首字母
-        # 效果: "TrajectoryPlanner.GridAdapter" -> "T.GridAdapter"
-        short_parts = [p[0] for p in parts[:-1]] + [parts[-1]]
-        short_name = ".".join(short_parts)
-
-        if len(short_name) <= max_width:
-            return short_name
-
-        # 策略2：如果缩写后依然太长 (说明层级极深，或末尾名字本身就超长)
-        # 优先保留最右侧的字符（最具体的组件名），在左侧截断并添加提示
-        # 效果: "A.B.C.D.E.F.G.GridAdapter" -> "..GridAdapter"
-        # 这样用户永远能看到日志是“谁”发出的，而不是看到一堆父级前缀 "A.B.C.D..."
-        return ".." + short_name[-(max_width - 2) :]
+        self.width_level = 8  # "CRITICAL" 长度+余量
+        self.width_name = 45  # 适配深层级模块名
 
     def format(self, record: logging.LogRecord) -> str:
-        # 1. 备份原始属性
+        """
+        格式化日志记录。
+
+        Args:
+            record (logging.LogRecord): 日志记录对象。
+        Returns:
+            str: 格式化后的日志字符串。
+        """
+        # 备份原始属性，防止污染其他 Handler
         orig_levelname = record.levelname
         orig_name = record.name
 
-        # 2. 格式化 Level (左对齐)
-        record.levelname = f"{orig_levelname[:self.width_level]:<{self.width_level}}"
+        # 格式化 Level (左对齐，固定宽度)
+        record.levelname = f"{orig_levelname:<{self.width_level}}"
 
-        # 3. 格式化 Name (智能缩写 + 填充)
-        display_name = self._smart_truncate_name(orig_name, self.width_name)
-        record.name = f"{display_name:<{self.width_name}}"
+        # 格式化 Name (左对齐填充)
+        display_name = orig_name
+        if len(display_name) < self.width_name:
+            record.name = f"{display_name:<{self.width_name}}"
+        else:
+            record.name = display_name
 
-        # 4. 执行父类格式化
+        # 执行父类格式化
         formatted_msg = super().format(record)
 
-        # 5. 还原现场 (防止影响其他 Handler)
+        # 还原现场
         record.levelname = orig_levelname
         record.name = orig_name
 
@@ -85,18 +89,27 @@ class SmartLogFormatter(logging.Formatter):
 
 
 class SocketIOLogHandler(logging.Handler):
-    """将日志消息实时推送到前端 SocketIO 的处理器"""
+    """
+    SocketIO 日志处理器。
+    实时将日志消息推送到前端 WebSocket。
+    """
 
     def emit(self, record: logging.LogRecord) -> None:
-        try:
-            # 获取格式化后的文本（包含对齐后的 name 和 level）
-            log_text = self.format(record)
+        """
+        发送日志到前端。
 
+        Args:
+            record (logging.LogRecord): 日志记录对象。
+        """
+        try:
+            log_text: str = self.format(record)
             if "socketio" in globals() and socketio is not None:
+                # 获取原始等级名称用于前端配色 (如 "INFO", "ERROR")
+                level_raw: str = record.levelname.strip().upper()
                 socketio.emit(
                     "server_log",
                     {
-                        "level": record.levelname.strip(),  # 前端可能需要原始等级颜色
+                        "level": level_raw,
                         "msg": log_text,
                         "time": record.created,
                     },
@@ -108,66 +121,89 @@ class SocketIOLogHandler(logging.Handler):
 # ==============================================================================
 # 2. 应用与日志初始化
 # ==============================================================================
-app = Flask(__name__, template_folder="templates")
+
+# =============================
+# 应用与日志系统初始化
+# =============================
+app: Flask = Flask(__name__, template_folder="templates")
 app.config["SECRET_KEY"] = settings.app.secret_key
 
-socketio = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
+socketio: SocketIO = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
 
-# --- 日志系统配置 ---
-log_level_name = settings.app.log_level.upper()
-log_level = getattr(logging, log_level_name, logging.INFO)
+# 日志系统配置
+log_level_name: str = settings.app.log_level.upper()
+log_level: int = getattr(logging, log_level_name, logging.INFO)
 
-# 清除默认 Handlers
+# 清除默认 Handlers，避免重复输出
 logging.getLogger().handlers = []
 
-# 定义格式：时间 | 等级 | 模块(智能对齐) | 消息
-LOG_FORMAT_STR = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-DATE_FORMAT_STR = "%H:%M:%S"
+# 日志格式定义
+LOG_FORMAT_STR: str = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+DATE_FORMAT_STR: str = "%H:%M:%S"
 
-smart_formatter = SmartLogFormatter(fmt=LOG_FORMAT_STR, datefmt=DATE_FORMAT_STR)
+smart_formatter: SmartLogFormatter = SmartLogFormatter(
+    fmt=LOG_FORMAT_STR, datefmt=DATE_FORMAT_STR
+)
 
-# 1. 控制台输出
-console_handler = logging.StreamHandler()
+# 控制台日志 Handler
+console_handler: logging.StreamHandler = logging.StreamHandler()
 console_handler.setFormatter(smart_formatter)
 console_handler.setLevel(log_level)
 
-# 2. WebSocket 输出
-web_log_handler = SocketIOLogHandler()
+# WebSocket 日志 Handler
+web_log_handler: SocketIOLogHandler = SocketIOLogHandler()
 web_log_handler.setFormatter(smart_formatter)
 web_log_handler.setLevel(log_level)
 
-# 3. 绑定到 Root Logger
-root_logger = logging.getLogger()
+# 绑定到 Root Logger
+root_logger: logging.Logger = logging.getLogger()
 root_logger.setLevel(log_level)
 root_logger.addHandler(console_handler)
 root_logger.addHandler(web_log_handler)
 
-# 初始化主 Logger
-logger = logging.getLogger("APP Server")
+# 主 Logger
+logger: logging.Logger = logging.getLogger("APP Server")
 logger.info(f"系统日志服务已就绪 (Level: {log_level_name})")
 
 
 # ==============================================================================
 # 3. 实例化业务服务
 # ==============================================================================
-crane_service = CraneService(settings=settings, logger=root_logger)
+
+# =============================
+# 业务服务实例化
+# =============================
+crane_service: CraneService = CraneService(settings=settings, logger=root_logger)
 
 
 # ==============================================================================
 # 4. HTTP 路由
 # ==============================================================================
+
+
 @app.route("/")
 def index() -> str:
+    """
+    首页路由。
+    Returns:
+        str: 渲染后的主页面 HTML。
+    """
     return render_template("main.html")
 
 
 # ==============================================================================
 # 5. SocketIO 事件处理
 # ==============================================================================
+
+
 @socketio.on("connect")
 def handle_connect() -> None:
+    """
+    处理客户端连接事件。
+    向新连接的客户端推送当前地图状态与最新路径。
+    """
     logger.info(f"客户端接入 (SID: {request.sid})")
-    state = crane_service.get_full_state()
+    state: Dict[str, Any] = crane_service.get_full_state()
     emit("update_map_state", state)
 
     if crane_service.last_calculated_path:
@@ -178,7 +214,14 @@ def handle_connect() -> None:
 
 @socketio.on("update_settings")
 def handle_update_settings(data: Dict[str, Any]) -> None:
+    """
+    处理配置更新事件。
+    Args:
+        data (Dict[str, Any]): 新配置数据。
+    """
     logger.info("收到配置更新指令")
+    success: bool
+    msg: str
     success, msg = crane_service.update_configuration(data)
 
     if success:
@@ -191,17 +234,24 @@ def handle_update_settings(data: Dict[str, Any]) -> None:
 
 @socketio.on("request_path")
 def handle_request_path(data: Dict[str, Any]) -> None:
+    """
+    处理路径规划请求。
+    Args:
+        data (Dict[str, Any]): 包含起点/终点等任务参数。
+    """
     if "start" in data or "end" in data:
         crane_service.update_mission_state(data)
         socketio.emit("sync_mission_coordinates", data, include_self=False)
 
     logger.info("启动路径规划引擎...")
+    path: list
+    stats: dict
+    msg: str
     path, stats, msg = crane_service.plan_path()
 
     if path:
         emit("update_path", path)
         emit("planning_stats", stats)
-        # 格式化消息中不再需要手动加前缀
         logger.info(MSG_PLAN_SUCCESS.format(count=len(path)))
         emit("operation_success", {"message": f"规划成功 ({len(path)} 节点)"})
     else:
@@ -213,14 +263,20 @@ def handle_request_path(data: Dict[str, Any]) -> None:
 
 @socketio.on("add_obstacle")
 def handle_add_obstacle(data: Dict[str, Any]) -> None:
+    """
+    处理新增障碍物事件。
+    Args:
+        data (Dict[str, Any]): 障碍物坐标。
+    """
     logger.info(f"新增障碍物: ({data.get('x')}, {data.get('y')})")
+    success: bool
+    msg: str
     success, msg = crane_service.add_obstacle(data)
 
     if success:
         socketio.emit("update_map_state", crane_service.get_full_state())
         emit("operation_success", {"message": msg})
 
-        # 自动触发重规划
         path, stats, _ = crane_service.plan_path()
         if path:
             emit("update_path", path)
@@ -235,7 +291,14 @@ def handle_add_obstacle(data: Dict[str, Any]) -> None:
 
 @socketio.on("remove_obstacle_near")
 def handle_remove_obstacle(data: Dict[str, Any]) -> None:
+    """
+    处理移除障碍物事件。
+    Args:
+        data (Dict[str, Any]): 目标障碍物坐标。
+    """
     logger.info(f"移除障碍物: ({data.get('x')}, {data.get('y')})")
+    success: bool
+    msg: str
     success, msg = crane_service.remove_obstacle_near(data)
 
     if success:
@@ -252,6 +315,11 @@ def handle_remove_obstacle(data: Dict[str, Any]) -> None:
 
 @socketio.on("sync_mission_coordinates")
 def handle_sync_mission(data: Dict[str, Any]) -> None:
+    """
+    处理任务坐标同步事件。
+    Args:
+        data (Dict[str, Any]): 任务坐标数据。
+    """
     crane_service.update_mission_state(data)
     socketio.emit("sync_mission_coordinates", data, include_self=False)
 

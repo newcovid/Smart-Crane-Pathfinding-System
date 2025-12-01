@@ -21,6 +21,7 @@ try:
     _rust_module = smart_crane_core
     HAS_RUST_CORE = True
     logger.info("Rust 高性能核心扩展 (smart_crane_core) 加载成功。")
+    logger.info("Rust 日志桥接已激活，Rust 内部日志将通过 Python Logger 输出。")
 
 except ImportError:
     # 这是一个预期内的行为（用户可能没编译 Rust 或处于纯 Python 开发环境）

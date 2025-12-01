@@ -10,10 +10,14 @@ crate-type = ["cdylib"]
 
 [dependencies]
 # PyO3 用于 Python 绑定
-pyo3 = { version = "0.23", features = ["extension-module"] }
+pyo3 = { version = "0.23.3", features = ["extension-module"] }
 
 # 社区成熟的寻路算法库
-pathfinding = "4.9"
+pathfinding = "4.14"
 
 # 用于处理浮点数哈希（A* 需要 Eq/Hash trait）
-ordered-float = "4.0"
+ordered-float = "4.6.0"
+
+# 日志支持
+log = "0.4.28"
+pyo3-log = "0.12.1"
