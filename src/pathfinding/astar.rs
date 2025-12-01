@@ -1,27 +1,53 @@
 use crate::common::{parse_python_grid, FlatGrid, Node};
 use ordered_float::NotNan;
-use pathfinding::prelude::astar;
 use pyo3::prelude::*;
-use std::sync::atomic::{AtomicUsize, Ordering}; // [修复] 使用原子类型替代 Cell 以确保线程安全 (Sync)
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
-// 预定义代价常量
+// --- 常量定义 ---
 const COST_1: f32 = 1.0;
 const COST_2: f32 = 1.41421356; // sqrt(2)
 const COST_3: f32 = 1.73205081; // sqrt(3)
+const EPSILON: f32 = 1e-4;
+
+/// A* 优先队列元素
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AStarItem {
+    f_score: NotNan<f32>, // f = g + h
+    node: Node,
+}
+
+// [重要] 实现确定性比较
+// Rust 的 BinaryHeap 是最大堆，我们需要最小堆的效果。
+// 1. 优先比较 f_score (越小越好 -> other.cmp(self))
+// 2. 如果 f_score 相同，比较 node 坐标 (越小越好 -> other.cmp(self))
+//    这模仿了 Python heapq (Min-Heap) 比较 tuple (f, node) 的行为：
+//    Python: (1.0, (0,0)) < (1.0, (1,1)) -> pop (0,0)
+//    Rust MaxHeap: pop 最大的。如果不反转 node 比较，(1,1) 会被认为比 (0,0) 大从而先 pop。
+//    为了对齐 Python 的 "坐标小者优先"，我们需要让 (0,0) 在 MaxHeap 中显得"更大"。
+impl Ord for AStarItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match other.f_score.cmp(&self.f_score) {
+            Ordering::Equal => other.node.cmp(&self.node), // 平局打破：坐标小的优先
+            ord => ord,
+        }
+    }
+}
+
+impl PartialOrd for AStarItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
 
 #[pyclass]
 pub struct RustAStarPlanner {
     grid: FlatGrid,
     use_octile_3d: bool,
     heuristic_weight: f32,
-    start_node: Option<Node>,
-    goal_node: Option<Node>,
-
-    // [修复] 性能统计器
-    // 使用 AtomicUsize 替代 Cell<usize>。
-    // Cell 只能在单线程内部可变，不满足 Sync trait，无法在 PyO3 类中安全共享。
-    // AtomicUsize 提供了线程安全的内部可变性。
-    nodes_expanded: AtomicUsize,
+    max_nodes_expanded: usize,
+    nodes_expanded_stat: AtomicUsize,
 }
 
 #[pymethods]
@@ -38,6 +64,10 @@ impl RustAStarPlanner {
         heuristic_weight: f32,
     ) -> PyResult<Self> {
         let flat_grid = parse_python_grid(grid)?;
+        let total_voxels = (flat_grid.rows * flat_grid.cols * flat_grid.layers.max(1)) as usize;
+
+        // 动态阈值: total_grid_size * 5
+        let max_nodes = std::cmp::max(5000, total_voxels * 5);
 
         Ok(Self {
             grid: flat_grid,
@@ -47,79 +77,127 @@ impl RustAStarPlanner {
             } else {
                 heuristic_weight
             },
-            start_node: None,
-            goal_node: None,
-            // 初始化原子计数器
-            nodes_expanded: AtomicUsize::new(0),
+            max_nodes_expanded: max_nodes,
+            nodes_expanded_stat: AtomicUsize::new(0),
         })
     }
 
-    /// [新增] 同步网格数据
-    /// 当 Python 端的网格发生变化时（如添加障碍物），必须调用此方法更新 Rust 内部数据
     pub fn update_grid(&mut self, grid: &Bound<PyAny>) -> PyResult<()> {
         let flat_grid = parse_python_grid(grid)?;
         self.grid = flat_grid;
         Ok(())
     }
 
-    pub fn initialize(&mut self, start: (i32, i32, i32), goal: (i32, i32, i32)) -> bool {
+    pub fn initialize(&self, start: (i32, i32, i32), goal: (i32, i32, i32)) -> bool {
         let s_node = Node::new(start.0, start.1, start.2);
         let g_node = Node::new(goal.0, goal.1, goal.2);
 
         if !self.grid.is_valid(&s_node) || !self.grid.is_valid(&g_node) {
             return false;
         }
-
         if self.grid.is_obstacle_unsafe(&g_node) {
             return false;
         }
-
-        self.start_node = Some(s_node);
-        self.goal_node = Some(g_node);
         true
     }
 
-    /// 执行计算
-    /// 返回值: (路径列表, 扩展节点数)
-    pub fn compute_path(&self, current_pos: (i32, i32, i32)) -> (Option<Vec<PyObject>>, usize) {
+    /// 执行 A* 计算
+    pub fn compute_path(
+        &self,
+        current_pos: (i32, i32, i32),
+        goal_pos: (i32, i32, i32),
+    ) -> (Option<Vec<PyObject>>, usize) {
         let start = Node::new(current_pos.0, current_pos.1, current_pos.2);
+        let goal = Node::new(goal_pos.0, goal_pos.1, goal_pos.2);
 
-        // 重置计数器 (使用 Relaxed 顺序即可，这里不涉及复杂的内存同步)
-        self.nodes_expanded.store(0, Ordering::Relaxed);
+        self.nodes_expanded_stat.store(0, AtomicOrdering::Relaxed);
 
-        if let Some(goal) = self.goal_node {
-            let result = astar(
-                &start,
-                |p| self.get_successors(p),
-                |p| self.heuristic(p, &goal),
-                |p| *p == goal,
-            );
+        let mut open_set = BinaryHeap::new();
+        let mut g_score: HashMap<Node, f32> = HashMap::new();
+        let mut came_from: HashMap<Node, Node> = HashMap::new();
 
-            // 获取最终的统计值
-            let nodes_count = self.nodes_expanded.load(Ordering::Relaxed);
+        g_score.insert(start, 0.0);
+        open_set.push(AStarItem {
+            f_score: NotNan::new(0.0).unwrap(),
+            node: start,
+        });
 
-            match result {
-                Some((path, _cost)) => {
-                    let is_3d = self.grid.layers > 1;
-                    let py_path = path.iter().map(|n| n.to_tuple(is_3d)).collect();
-                    (Some(py_path), nodes_count)
-                }
-                None => (None, nodes_count),
+        let mut nodes_expanded = 0;
+
+        while let Some(item) = open_set.pop() {
+            let current = item.node;
+
+            // 如果当前路径比已知最短路径差，跳过 (Lazy Deletion)
+            // 注意：因为 f = g + h，h 是固定的，所以比较 f 和 g 是一样的效果
+            let current_g = *g_score.get(&current).unwrap_or(&f32::INFINITY);
+
+            // 简单的有效性检查：如果弹出的节点的 f 值严重大于预期，可能需要跳过
+            // 但标准做法是检查 g 值。这里为了性能，我们假设堆中的冗余是可以接受的，
+            // 只要我们在处理邻居时进行更严格的检查。
+
+            nodes_expanded += 1;
+
+            // 熔断保护
+            if nodes_expanded > self.max_nodes_expanded {
+                return (None, nodes_expanded);
             }
-        } else {
-            (None, 0)
+
+            if current == goal {
+                let path = self.reconstruct_path(came_from, current);
+                return (Some(path), nodes_expanded);
+            }
+
+            for (neighbor, move_cost) in self.get_neighbors(&current) {
+                let tentative_g = current_g + move_cost;
+                let neighbor_g = *g_score.get(&neighbor).unwrap_or(&f32::INFINITY);
+
+                if tentative_g < neighbor_g - EPSILON {
+                    came_from.insert(neighbor, current);
+                    g_score.insert(neighbor, tentative_g);
+
+                    let h = self.heuristic(&neighbor, &goal);
+                    let f = tentative_g + h;
+
+                    open_set.push(AStarItem {
+                        f_score: NotNan::new(f).unwrap(),
+                        node: neighbor,
+                    });
+                }
+            }
         }
+
+        (None, nodes_expanded)
     }
 }
 
+// 内部方法
 impl RustAStarPlanner {
-    fn get_successors(&self, node: &Node) -> Vec<(Node, NotNan<f32>)> {
-        // [统计] 每次请求邻居，意味着当前节点被展开了
-        // fetch_add 返回的是修改前的值，我们这里只关心副作用
-        self.nodes_expanded.fetch_add(1, Ordering::Relaxed);
+    fn heuristic(&self, a: &Node, b: &Node) -> f32 {
+        let dx = (a.x - b.x).abs() as f32;
+        let dy = (a.y - b.y).abs() as f32;
+        let h_val;
 
+        if self.grid.layers <= 1 {
+            let min_delta = dx.min(dy);
+            h_val = (dx + dy) + (COST_2 - 2.0) * min_delta;
+        } else {
+            let dz = (a.z - b.z).abs() as f32;
+            if self.use_octile_3d {
+                let mut delta = [dx, dy, dz];
+                delta.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                h_val = delta[0] * COST_3
+                    + (delta[1] - delta[0]) * COST_2
+                    + (delta[2] - delta[1]) * COST_1;
+            } else {
+                h_val = (dx * dx + dy * dy + dz * dz).sqrt();
+            }
+        }
+        h_val * self.heuristic_weight
+    }
+
+    fn get_neighbors(&self, node: &Node) -> Vec<(Node, f32)> {
         let mut successors = Vec::with_capacity(26);
-        let is_2d = self.grid.layers == 1;
+        let is_2d = self.grid.layers <= 1;
 
         if is_2d {
             let moves = [
@@ -149,7 +227,7 @@ impl RustAStarPlanner {
                         continue;
                     }
                 }
-                successors.push((next_node, NotNan::new(cost).unwrap()));
+                successors.push((next_node, cost));
             }
         } else {
             for dx in -1..=1 {
@@ -185,7 +263,7 @@ impl RustAStarPlanner {
                             COST_3
                         };
 
-                        successors.push((next_node, NotNan::new(cost).unwrap()));
+                        successors.push((next_node, cost));
                     }
                 }
             }
@@ -193,26 +271,18 @@ impl RustAStarPlanner {
         successors
     }
 
-    fn heuristic(&self, a: &Node, b: &Node) -> NotNan<f32> {
-        let h_val: f32;
-        let dx = (a.x - b.x).abs() as f32;
-        let dy = (a.y - b.y).abs() as f32;
+    fn reconstruct_path(&self, came_from: HashMap<Node, Node>, current: Node) -> Vec<PyObject> {
+        let mut path = Vec::new();
+        let mut curr = current;
+        path.push(curr);
 
-        if self.grid.layers == 1 {
-            let min_delta = if dx < dy { dx } else { dy };
-            h_val = (dx + dy) + (COST_2 - 2.0) * min_delta;
-        } else {
-            let dz = (a.z - b.z).abs() as f32;
-            if self.use_octile_3d {
-                let mut delta = [dx, dy, dz];
-                delta.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                h_val = delta[0] * COST_3
-                    + (delta[1] - delta[0]) * COST_2
-                    + (delta[2] - delta[1]) * COST_1;
-            } else {
-                h_val = (dx * dx + dy * dy + dz * dz).sqrt();
-            }
+        while let Some(&parent) = came_from.get(&curr) {
+            curr = parent;
+            path.push(curr);
         }
-        NotNan::new(h_val * self.heuristic_weight).unwrap()
+        path.reverse();
+
+        let is_3d = self.grid.layers > 1;
+        path.iter().map(|n| n.to_tuple(is_3d)).collect()
     }
 }

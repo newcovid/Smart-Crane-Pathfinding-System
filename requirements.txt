@@ -4,3 +4,4 @@ eventlet
 python-dotenv
 numpy
 scipy
+pydantic-settings

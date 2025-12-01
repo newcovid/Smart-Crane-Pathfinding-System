@@ -1,8 +1,12 @@
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
+// [修改] 移除了未使用的 use std::cmp::Ordering;
+// #[derive(Ord)] 会自动处理比较逻辑，无需显式导入 Ordering 类型，除非手动实现 impl Ord。
 
 /// 通用节点坐标 (x, y, z)
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Copy)]
+/// [保持] 保留 PartialOrd, Ord 以支持确定性比较 (Tie-breaking)
+/// 自动派生的 Ord 会按照字段定义顺序比较: 先 x, 后 y, 最后 z
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Copy, PartialOrd, Ord)]
 pub struct Node {
     pub x: i32,
     pub y: i32,
@@ -17,10 +21,7 @@ impl Node {
     pub fn to_tuple(&self, is_3d: bool) -> PyObject {
         Python::with_gil(|py| {
             if is_3d {
-                // [修复] PyO3 0.23: PyTuple::new_bound -> PyTuple::new
                 let elements = [self.x, self.y, self.z];
-                // PyTuple::new 现在直接返回 Bound<'py, PyTuple>
-                // 如果编译器提示需要 unwrap，请根据提示添加，但在大多数 0.23 版本中它直接返回 Bound
                 PyTuple::new(py, elements).unwrap().into_any().unbind()
             } else {
                 let elements = [self.x, self.y];
