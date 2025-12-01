@@ -104,3 +104,5 @@ target/**
 
 # Dependency/temp files produced during Rust builds
 *.d
+# Allow root smart_crane_core.pyd to be tracked in git
+!/smart_crane_core.pyd
