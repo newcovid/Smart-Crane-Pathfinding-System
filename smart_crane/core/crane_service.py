@@ -22,6 +22,16 @@ from smart_crane.core.constants import (
     MSG_OBS_NOT_FOUND,
     TYPE_STATIC,
 )
+from smart_crane.core.constants import (
+    DEFAULT_MISSION_START_X,
+    DEFAULT_MISSION_START_Y,
+    DEFAULT_MISSION_START_Z,
+    DEFAULT_MISSION_END_X,
+    DEFAULT_MISSION_END_Y,
+    DEFAULT_MISSION_END_Z,
+    UUID_ID_LEN,
+    COORD_PRINT_PREC,
+)
 
 
 class CraneService:
@@ -53,10 +63,18 @@ class CraneService:
 
         self.settings = settings
 
-        # 初始化任务状态
+        # 初始化任务状态（使用常量避免魔法数字）
         self.mission_state = {
-            "start": {"x": 5.0, "y": 5.0, "z": 5.0},
-            "end": {"x": 30.0, "y": 20.0, "z": 5.0},
+            "start": {
+                "x": DEFAULT_MISSION_START_X,
+                "y": DEFAULT_MISSION_START_Y,
+                "z": DEFAULT_MISSION_START_Z,
+            },
+            "end": {
+                "x": DEFAULT_MISSION_END_X,
+                "y": DEFAULT_MISSION_END_Y,
+                "z": DEFAULT_MISSION_END_Z,
+            },
         }
 
         self.last_calculated_path: List[Tuple[float, float, float]] = []
@@ -233,7 +251,7 @@ class CraneService:
             Tuple[bool, str]: (是否成功, 消息)。
         """
         try:
-            oid = uuid.uuid4().hex[:8]
+            oid = uuid.uuid4().hex[:UUID_ID_LEN]
             x, y, w, h = (
                 float(data["x"]),
                 float(data["y"]),
@@ -244,7 +262,7 @@ class CraneService:
             z = float(data.get("z", self.settings.crane.default_obstacle_height))
 
             self.logger.info(
-                f"添加障碍物请求: {data.get('type')} at ({x:.1f},{y:.1f}), Size: {w:.1f}x{h:.1f}"
+                f"添加障碍物请求: {data.get('type')} 位于 ({x:.{COORD_PRINT_PREC}f},{y:.{COORD_PRINT_PREC}f})，尺寸: {w:.{COORD_PRINT_PREC}f}x{h:.{COORD_PRINT_PREC}f}"
             )
 
             if data.get("type") == TYPE_STATIC:

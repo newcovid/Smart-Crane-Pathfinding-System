@@ -2,6 +2,13 @@ import math
 import logging
 from typing import List, Tuple, Dict, Optional, Any, Union, TYPE_CHECKING
 
+from smart_crane.core.constants import (
+    BOUNDARY_EPS,
+    Z_ABOVE_MAP_DELTA,
+    DEFAULT_Z_HIGH,
+    GRID_CENTER_OFFSET,
+)
+
 # [类型注解优化] 仅在类型检查阶段导入 MapManager，避免运行时循环引用
 if TYPE_CHECKING:
     from smart_crane.core.map_manager import WorkshopMapManager
@@ -149,17 +156,18 @@ class GridFactory:
         for o in obstacles:
             # 获取障碍物在网格中的覆盖范围
             r_s, c_s, _ = coord_converter.world_to_grid(o["x_m"], o["y_m"])
-            # 使用 -1e-4 避免浮点数恰好在边界时多占一格
+            # 使用 -BOUNDARY_EPS 避免浮点数恰好在边界时多占一格
             r_e, c_e, _ = coord_converter.world_to_grid(
-                o["x_m"] + o["w_m"] - 1e-4, o["y_m"] + o["h_m"] - 1e-4
+                o["x_m"] + o["w_m"] - BOUNDARY_EPS,
+                o["y_m"] + o["h_m"] - BOUNDARY_EPS,
             )
 
             if is_infinite:
                 # 无限高模式：高度设为地图顶端以上
-                obs_occupy_z = height_m + 1.0
+                obs_occupy_z = height_m + Z_ABOVE_MAP_DELTA
             else:
                 # 有限高模式：物体高度 + 垂直安全边距
-                obs_occupy_z = o.get("z_m", 100.0) + z_margin_obs
+                obs_occupy_z = o.get("z_m", DEFAULT_Z_HIGH) + z_margin_obs
 
             # 限制索引范围，防止越界
             r_s, r_e = max(0, r_s), min(rows, r_e + 1)
@@ -175,25 +183,25 @@ class GridFactory:
         # 使用最大值滤波器 (Maximum Filter) 对高度图进行形态学膨胀
         if xy_margin > 0:
             # 构造圆形卷积核
-            search_radius = int(math.ceil(xy_margin + 0.5))
+            search_radius = int(math.ceil(xy_margin + GRID_CENTER_OFFSET))
             y, x = np.ogrid[
                 -search_radius : search_radius + 1, -search_radius : search_radius + 1
             ]
-            mask = x**2 + y**2 <= (xy_margin + 0.5) ** 2
+            mask = x**2 + y**2 <= (xy_margin + GRID_CENTER_OFFSET) ** 2
 
             # 执行滤波：这会让“高”的区域向四周扩散，模拟 3D 柱体的变粗效果
             height_map = maximum_filter(
                 height_map,
                 footprint=mask,
                 mode="constant",
-                cval=height_m + 1.0,  # 边界外视为无限高墙
+                cval=height_m + Z_ABOVE_MAP_DELTA,  # 边界外视为无限高墙
             )
 
         # 4. 3D 体素化 (Voxelization via Broadcasting)
         # 利用 NumPy 的广播机制快速生成 3D 矩阵
 
         # z_coords: (1, 1, Layers) -> 表示每层体素中心的物理高度
-        z_coords = (np.arange(layers) + 0.5) * resolution
+        z_coords = (np.arange(layers) + GRID_CENTER_OFFSET) * resolution
         z_coords = z_coords.reshape(1, 1, -1)
 
         # height_map: (Rows, Cols, 1) -> 扩展维度以匹配 z_coords

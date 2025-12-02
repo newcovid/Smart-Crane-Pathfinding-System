@@ -3,7 +3,17 @@ import logging
 from typing import Tuple, Optional, Callable, Union, List, TYPE_CHECKING
 
 from smart_crane.core.config import Settings
-from smart_crane.core.constants import SHAPE_CIRCLE, EPSILON
+from smart_crane.core.constants import (
+    SHAPE_CIRCLE,
+    EPSILON,
+    FOOTPRINT_HALF_DIVISOR,
+    ESCAPE_SEARCH_RADIUS_MARGIN,
+    ESCAPE_SEARCH_RADIUS_MAX,
+    GRACE_POINT_TOL_SQ,
+    RESOLUTION_HALF_FACTOR,
+    RUST_LABEL,
+    PYTHON_FALLBACK_LABEL,
+)
 from smart_crane.core.rust_bridge import RustBackend
 
 if TYPE_CHECKING:
@@ -36,8 +46,12 @@ class SafetyGuard:
 
         # 尝试获取 Rust 实现
         self.RustGuard = RustBackend.get_safety_guard_class()
-        mode = "Rust" if (self.RustGuard and self.map_mgr.rust_map) else "Python"
-        self.logger.debug(f"SafetyGuard 安全守卫已就绪 (Mode: {mode})。")
+        mode_cn = (
+            RUST_LABEL
+            if (self.RustGuard and self.map_mgr.rust_map)
+            else PYTHON_FALLBACK_LABEL
+        )
+        self.logger.debug(f"SafetyGuard 已就绪（{mode_cn}）。")
 
     def validate_endpoints(
         self, start_pt: Point3D, end_pt: Point3D, settings: Settings
@@ -47,10 +61,14 @@ class SafetyGuard:
         w = settings.crane.footprint_width
         l = settings.crane.footprint_length
 
-        xy_margin = (w / 2.0) if shape == SHAPE_CIRCLE else (math.hypot(w, l) / 2.0)
+        xy_margin = (
+            (w / FOOTPRINT_HALF_DIVISOR)
+            if shape == SHAPE_CIRCLE
+            else (math.hypot(w, l) / FOOTPRINT_HALF_DIVISOR)
+        )
         z_safety = settings.crane.z_safety_margin
         crane_h = settings.crane.footprint_height
-        z_margin = z_safety + (crane_h / 2.0)
+        z_margin = z_safety + (crane_h / FOOTPRINT_HALF_DIVISOR)
         hard_eps = EPSILON
 
         # 1. 物理硬碰撞检测 (Hard Collision)
@@ -72,7 +90,7 @@ class SafetyGuard:
         if self.map_mgr.check_collision_raw(
             end_pt[0], end_pt[1], end_pt[2], xy_margin, z_margin, ignore_z=False
         ):
-            msg = "终点位于安全缓冲区(膨胀层)内，禁止停靠。"
+            msg = "终点位于安全缓冲区（膨胀层）内，禁止停靠。"
             self.logger.warning(msg)
             return False, msg, False
 
@@ -80,7 +98,7 @@ class SafetyGuard:
         if self.map_mgr.check_collision_raw(
             start_pt[0], start_pt[1], start_pt[2], xy_margin, z_margin, ignore_z=False
         ):
-            self.logger.info("起点位于安全缓冲区内，标记为[需要脱困]。")
+            self.logger.info("起点位于安全缓冲区内，标记为需要脱困。")
             start_needs_escape = True
 
         return True, "Valid", start_needs_escape
@@ -101,17 +119,25 @@ class SafetyGuard:
         shape = settings.crane.footprint_shape
         w = settings.crane.footprint_width
         l = settings.crane.footprint_length
-        radius_m = (w / 2.0) if shape == SHAPE_CIRCLE else (math.hypot(w, l) / 2.0)
+        radius_m = (
+            (w / FOOTPRINT_HALF_DIVISOR)
+            if shape == SHAPE_CIRCLE
+            else (math.hypot(w, l) / FOOTPRINT_HALF_DIVISOR)
+        )
         resolution = self.map_mgr.resolution_m
         grid_inflation_radius = int(math.ceil(radius_m / resolution))
-        max_search_r = min(grid_inflation_radius + 5, 50)
+        max_search_r = min(
+            grid_inflation_radius + ESCAPE_SEARCH_RADIUS_MARGIN,
+            ESCAPE_SEARCH_RADIUS_MAX,
+        )
 
         # 垂直参数
         z_margin = (
-            settings.crane.z_safety_margin + settings.crane.footprint_height / 2.0
+            settings.crane.z_safety_margin
+            + settings.crane.footprint_height / FOOTPRINT_HALF_DIVISOR
         )
         # 加上分辨率的一半作为网格容错
-        check_radius = radius_m + (resolution / 2.0)
+        check_radius = radius_m + (resolution * RESOLUTION_HALF_FACTOR)
         is_infinite = settings.crane.obstacle_infinite_height
 
         # =====================================================================
@@ -143,17 +169,19 @@ class SafetyGuard:
                         return (result[0], result[1])
                     return result
                 else:
-                    self.logger.error("Rust 脱困搜索失败 (范围耗尽)。")
+                    self.logger.error("Rust 脱困搜索失败：搜索范围耗尽。")
                     return None
 
             except Exception as e:
-                self.logger.error(f"Rust 脱困搜索异常，降级至 Python: {e}")
+                self.logger.error(f"Rust 脱困搜索异常，降级至 Python：{e}")
                 # Fallback to Python...
 
         # =====================================================================
         # 2. Python 原生实现 (Fallback)
         # =====================================================================
-        self.logger.warning(f"[Python] 尝试脱困: Node={node}, MaxRadius={max_search_r}")
+        self.logger.warning(
+            f"{PYTHON_FALLBACK_LABEL}：尝试脱困，起点={node}，最大半径={max_search_r} 格"
+        )
 
         if planner.is_safe(node):
             return node
@@ -185,12 +213,10 @@ class SafetyGuard:
                     candidates,
                     key=lambda n: sum((n[i] - ref_goal[i]) ** 2 for i in range(dims)),
                 )
-                self.logger.info(f"[Python] 脱困成功! 半径: {r}, 新起点: {best_node}")
+                self.logger.info(f"脱困成功：半径 {r} 格， 新起点: {best_node}")
                 return best_node
 
-        self.logger.error(
-            f"[Python] 脱困失败: 在半径 {max_search_r} 格范围内未找到安全节点。"
-        )
+        self.logger.error(f"脱困失败：在半径 {max_search_r} 格范围内未找到安全节点。")
         return None
 
     def create_collision_checker(
@@ -201,11 +227,16 @@ class SafetyGuard:
         w = settings.crane.footprint_width
         l = settings.crane.footprint_length
 
-        radius = (w / 2.0) if shape == SHAPE_CIRCLE else (math.hypot(w, l) / 2.0)
-        radius += self.map_mgr.resolution_m / 2.0
+        radius = (
+            (w / FOOTPRINT_HALF_DIVISOR)
+            if shape == SHAPE_CIRCLE
+            else (math.hypot(w, l) / FOOTPRINT_HALF_DIVISOR)
+        )
+        radius += self.map_mgr.resolution_m * RESOLUTION_HALF_FACTOR
 
         z_margin = (
-            settings.crane.z_safety_margin + settings.crane.footprint_height / 2.0
+            settings.crane.z_safety_margin
+            + settings.crane.footprint_height / FOOTPRINT_HALF_DIVISOR
         )
         is_infinite = settings.crane.obstacle_infinite_height
 
@@ -214,11 +245,11 @@ class SafetyGuard:
 
             if (x - grace_start[0]) ** 2 + (y - grace_start[1]) ** 2 + (
                 z - grace_start[2]
-            ) ** 2 < 0.25:
+            ) ** 2 < GRACE_POINT_TOL_SQ:
                 return True
             if (x - grace_end[0]) ** 2 + (y - grace_end[1]) ** 2 + (
                 z - grace_end[2]
-            ) ** 2 < 0.25:
+            ) ** 2 < GRACE_POINT_TOL_SQ:
                 return True
 
             if self.map_mgr.check_collision_raw(

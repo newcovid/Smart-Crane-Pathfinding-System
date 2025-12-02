@@ -4,7 +4,15 @@ from typing import List, Optional, TYPE_CHECKING
 
 from .base import PathPostProcessor, CollisionChecker, NodeType
 from smart_crane.core.rust_bridge import RustBackend
-from smart_crane.core.constants import SHAPE_CIRCLE
+from smart_crane.core.constants import (
+    SHAPE_CIRCLE,
+    PATH_MIN_NODES,
+    PATH_LOS_MIN_DISTANCE,
+    PATH_LOS_SAMPLE_MULTIPLIER,
+    PATH_LOS_MIN_STEPS,
+    RESOLUTION_HALF_FACTOR,
+    FOOTPRINT_HALF_DIVISOR,
+)
 
 if TYPE_CHECKING:
     from smart_crane.core.map_manager import WorkshopMapManager
@@ -51,8 +59,8 @@ class GreedyShortcutProcessor(PathPostProcessor):
         Returns:
             List[NodeType]: 简化后的路径。
         """
-        # 路径点少于 3 个无法优化
-        if not path or len(path) < 3:
+        # 路径点少于 PATH_MIN_NODES 无法优化
+        if not path or len(path) < PATH_MIN_NODES:
             self.logger.debug(f"路径太短 ({len(path)} 节点)，无需优化。")
             return path
 
@@ -74,14 +82,16 @@ class GreedyShortcutProcessor(PathPostProcessor):
                     w = self.settings.crane.footprint_width
                     l = self.settings.crane.footprint_length
                     radius_m = (
-                        (w / 2.0) if shape == SHAPE_CIRCLE else (math.hypot(w, l) / 2.0)
+                        (w / FOOTPRINT_HALF_DIVISOR)
+                        if shape == SHAPE_CIRCLE
+                        else (math.hypot(w, l) / FOOTPRINT_HALF_DIVISOR)
                     )
                     # 增加半个分辨率缓冲 (同 Python logic)
-                    radius_m += self.map_mgr.resolution_m / 2.0
+                    radius_m += self.map_mgr.resolution_m * RESOLUTION_HALF_FACTOR
 
                     z_margin = (
                         self.settings.crane.z_safety_margin
-                        + self.settings.crane.footprint_height / 2.0
+                        + self.settings.crane.footprint_height / FOOTPRINT_HALF_DIVISOR
                     )
                     is_infinite = self.settings.crane.obstacle_infinite_height
 
@@ -157,11 +167,11 @@ class GreedyShortcutProcessor(PathPostProcessor):
         dist_sq = sum((start[i] - end[i]) ** 2 for i in range(dims))
         distance = math.sqrt(dist_sq)
 
-        if distance < 1e-6:
+        if distance < PATH_LOS_MIN_DISTANCE:
             return True
 
-        steps = int(distance * 5)
-        steps = max(steps, 2)
+        steps = int(distance * PATH_LOS_SAMPLE_MULTIPLIER)
+        steps = max(steps, PATH_LOS_MIN_STEPS)
         deltas = [(end[i] - start[i]) for i in range(dims)]
 
         for i in range(1, steps):

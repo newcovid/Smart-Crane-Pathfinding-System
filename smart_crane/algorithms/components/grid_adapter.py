@@ -9,6 +9,9 @@ from smart_crane.core.constants import (
     SHAPE_CIRCLE,
     MIN_SAFE_HEIGHT_OFFSET,
     GRID_MARGIN_BUFFER,
+    FOOTPRINT_HALF_DIVISOR,
+    RUST_LABEL,
+    PYTHON_FALLBACK_LABEL,
 )
 
 # 使用 TYPE_CHECKING 避免运行时循环导入
@@ -43,8 +46,12 @@ class GridAdapter:
             self.logger = logging.getLogger(self.__class__.__name__)
 
         self.RustAdapter = RustBackend.get_grid_adapter_class()
-        mode = "Rust" if (self.RustAdapter and self.map_mgr.rust_map) else "Python"
-        self.logger.debug(f"适配器初始化完成 (Mode: {mode})。")
+        mode_cn = (
+            RUST_LABEL
+            if (self.RustAdapter and self.map_mgr.rust_map)
+            else PYTHON_FALLBACK_LABEL
+        )
+        self.logger.debug(f"GridAdapter 初始化完成（{mode_cn}）。")
 
     def prepare_grids(
         self, settings: Settings
@@ -56,16 +63,16 @@ class GridAdapter:
         l = settings.crane.footprint_length
 
         if shape == SHAPE_CIRCLE:
-            radius_m = w / 2.0
+            radius_m = w / FOOTPRINT_HALF_DIVISOR
         else:
-            radius_m = math.hypot(w, l) / 2.0
+            radius_m = math.hypot(w, l) / FOOTPRINT_HALF_DIVISOR
 
         xy_margin = radius_m / self.map_mgr.resolution_m
 
         # 2. 计算垂直安全边距
         user_z_margin = settings.crane.z_safety_margin
         crane_h = settings.crane.footprint_height
-        z_margin_obs = user_z_margin + (crane_h / 2.0)
+        z_margin_obs = user_z_margin + (crane_h / FOOTPRINT_HALF_DIVISOR)
 
         # 3. 策略分支
         is_fixed_height = settings.crane.enable_fixed_height_cruise
@@ -76,7 +83,7 @@ class GridAdapter:
             cruise_z = settings.crane.safe_travel_z_m
             check_z = None if is_infinite_obs else cruise_z
 
-            self.logger.info(f"构建 2.5D 巡航网格 (巡航高度: {cruise_z}m)")
+            self.logger.info(f"构建 2.5D 巡航网格（巡航高度: {cruise_z} m）")
 
             grid_2d = self.map_mgr.get_2d_projection_grid(
                 xy_margin=xy_margin, check_z=check_z, z_margin=z_margin_obs
@@ -84,10 +91,10 @@ class GridAdapter:
             return grid_2d, grid_2d, 0.0
         else:
             # === 3D 模式 ===
-            z_margin_ceil = crane_h / 2.0
+            z_margin_ceil = crane_h / FOOTPRINT_HALF_DIVISOR
 
             self.logger.info(
-                f"构建 3D 体素网格 (Z-Margin: Obs={z_margin_obs:.1f}m, Ceil={z_margin_ceil:.1f}m)"
+                f"构建 3D 体素网格（Z-Margin: Obs={z_margin_obs:.1f} m, Ceil={z_margin_ceil:.1f} m）"
             )
 
             grid_3d = self.map_mgr.get_3d_voxel_grid(
@@ -121,9 +128,9 @@ class GridAdapter:
         c_w = settings.crane.footprint_width
         c_l = settings.crane.footprint_length
         if shape == SHAPE_CIRCLE:
-            radius_m = c_w / 2.0
+            radius_m = c_w / FOOTPRINT_HALF_DIVISOR
         else:
-            radius_m = math.hypot(c_w, c_l) / 2.0
+            radius_m = math.hypot(c_w, c_l) / FOOTPRINT_HALF_DIVISOR
 
         margin_grid = (
             int(math.ceil(radius_m / self.map_mgr.resolution_m)) + GRID_MARGIN_BUFFER
@@ -158,7 +165,9 @@ class GridAdapter:
                 if is_fixed_height and not is_infinite_obs:
                     cruise_z = settings.crane.safe_travel_z_m
                     crane_h = settings.crane.footprint_height
-                    z_margin_obs = settings.crane.z_safety_margin + (crane_h / 2.0)
+                    z_margin_obs = settings.crane.z_safety_margin + (
+                        crane_h / FOOTPRINT_HALF_DIVISOR
+                    )
                     if z <= (cruise_z - z_margin_obs):
                         should_call_rust = False
 
@@ -192,15 +201,17 @@ class GridAdapter:
             if not is_infinite_obs:
                 cruise_z = settings.crane.safe_travel_z_m
                 crane_h = settings.crane.footprint_height
-                z_margin_obs = settings.crane.z_safety_margin + (crane_h / 2.0)
+                z_margin_obs = settings.crane.z_safety_margin + (
+                    crane_h / FOOTPRINT_HALF_DIVISOR
+                )
                 z_threshold = cruise_z - z_margin_obs
                 if z <= z_threshold:
                     should_update = False
 
-            if should_update:
-                for r in range(r_start, r_end):
-                    for c in range(c_start, c_end):
-                        val_new = new_grid[r][c]
+                if should_update:
+                    for r in range(r_start, r_end):
+                        for c in range(c_start, c_end):
+                            val_new = new_grid[r][c]
                         val_old = 0
                         if old_grid is not None:
                             if 0 <= r < len(old_grid) and 0 <= c < len(old_grid[0]):

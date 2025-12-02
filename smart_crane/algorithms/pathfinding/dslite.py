@@ -5,7 +5,17 @@ from typing import List, Tuple, Dict, Optional, Any
 
 from .base import PathPlannerBase, NodeType
 from smart_crane.core.rust_bridge import RustBackend
-from smart_crane.core.constants import SQRT_2, SQRT_3, EPSILON, FLOAT_TOLERANCE, INF
+from smart_crane.core.constants import (
+    SQRT_2,
+    SQRT_3,
+    EPSILON,
+    FLOAT_TOLERANCE,
+    INF,
+    DSLITE_DEFAULT_MAX_NODES,
+    DSLITE_MAX_NODES_MULTIPLIER,
+    DSLITE_COST_THRESHOLD_MULTIPLIER,
+    DSLITE_DEFAULT_HEURISTIC_MIN_WEIGHT,
+)
 
 
 class DLitePlanner(PathPlannerBase[NodeType]):
@@ -41,7 +51,10 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         self.pending_expansions = 0
 
         self.use_octile_3d = use_octile_3d
-        self.heuristic_weight = max(1.0, heuristic_weight)
+        # 确保启发式权重至少为常量定义的最小值，避免低于 1 导致非预期行为
+        self.heuristic_weight = max(
+            DSLITE_DEFAULT_HEURISTIC_MIN_WEIGHT, heuristic_weight
+        )
 
         # D* Lite 核心数据结构 (仅 Python 模式使用)
         self.g: Dict[NodeType, float] = {}
@@ -56,20 +69,23 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         self.goal_node: Optional[NodeType] = None
         self.last_start_node: Optional[NodeType] = None
 
-        # [修复] 动态计算最大扩展节点数，防止复杂地图下过早熔断
-        # 逻辑与 A* 和 Rust 版本保持一致
+        # 动态计算最大扩展节点数，防止复杂地图下过早熔断
         layers_count = self.layers if self.layers > 0 else 1
         total_grid_size = self.rows * self.cols * layers_count
-        self.max_nodes_expanded = max(5000, total_grid_size * 5)
+        self.max_nodes_expanded = max(
+            DSLITE_DEFAULT_MAX_NODES, total_grid_size * DSLITE_MAX_NODES_MULTIPLIER
+        )
 
         # 成本阈值，防止在无解情况下无限搜索
-        self.cost_threshold = float(total_grid_size) * 100.0
+        self.cost_threshold = float(total_grid_size) * DSLITE_COST_THRESHOLD_MULTIPLIER
 
         self.COST_1 = 1.0
         self.COST_2 = SQRT_2
         self.COST_3 = SQRT_3
 
-        self.logger.info(f"D* Lite (Python) 限制: MaxNodes={self.max_nodes_expanded}")
+        self.logger.info(
+            f"D* Lite（Python）限制：最大扩展节点 = {self.max_nodes_expanded}"
+        )
 
         # 加载 Rust 核心
         if RustBackend.is_available() and self.enable_rust:
@@ -360,14 +376,14 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         expansions = 0
         while self.U:
             if expansions > self.max_nodes_expanded:
-                # [Logger 优化] 输出警告以便调试
-                if expansions % 1000 == 0:
+                # 超过限定的最大扩展节点数，定期记录警告并中断以防止长时间阻塞
+                if expansions % self.max_nodes_expanded == 0:
                     self.logger.warning(
-                        f"[Python D*] 扩展节点超过阈值 {self.max_nodes_expanded}，强制中断。"
+                        f"扩展节点超出限制（{self.max_nodes_expanded}），中止搜索以防阻塞。已扩展 {expansions} 个节点。"
                     )
                 return False
 
-            # 取出堆顶
+            # 取出堆顶项
             k_old, u = self.U[0]
 
             # Lazy Removal: 如果取出的 key 与实际存储的 key 不符，说明是旧数据，丢弃

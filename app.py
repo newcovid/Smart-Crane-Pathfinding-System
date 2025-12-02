@@ -24,7 +24,14 @@ from flask_socketio import SocketIO, emit
 
 from smart_crane.core.config import settings
 from smart_crane.core.crane_service import CraneService
-from smart_crane.core.constants import MSG_PLAN_SUCCESS, MSG_PLAN_FAIL
+from smart_crane.core.constants import (
+    MSG_PLAN_SUCCESS,
+    MSG_PLAN_FAIL,
+    LOG_LEVEL_WIDTH,
+    LOGGER_NAME_WIDTH,
+    DEFAULT_SERVER_HOST,
+    DEFAULT_SERVER_PORT,
+)
 
 
 # ==============================================================================
@@ -52,8 +59,9 @@ class SmartLogFormatter(logging.Formatter):
         self, fmt: Optional[str] = None, datefmt: Optional[str] = None
     ) -> None:
         super().__init__(fmt, datefmt)
-        self.width_level = 8  # "CRITICAL" 长度+余量
-        self.width_name = 45  # 适配深层级模块名
+        # 从常量中读取格式化宽度，避免魔法数字
+        self.width_level = LOG_LEVEL_WIDTH
+        self.width_name = LOGGER_NAME_WIDTH
 
     def format(self, record: logging.LogRecord) -> str:
         """
@@ -325,5 +333,5 @@ def handle_sync_mission(data: Dict[str, Any]) -> None:
 
 
 if __name__ == "__main__":
-    logger.info("Web服务器启动: http://0.0.0.0:5000")
-    socketio.run(app, host="0.0.0.0", port=5000, debug=False)
+    logger.info(f"Web 服务器启动： http://{DEFAULT_SERVER_HOST}:{DEFAULT_SERVER_PORT}")
+    socketio.run(app, host=DEFAULT_SERVER_HOST, port=DEFAULT_SERVER_PORT, debug=False)

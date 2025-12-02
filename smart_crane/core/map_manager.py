@@ -7,7 +7,16 @@ from typing import List, Tuple, Optional, Dict, Any
 
 from smart_crane.core.components.grid_factory import GridFactory
 from smart_crane.core.rust_bridge import RustBackend
-from smart_crane.core.constants import DEFAULT_Z_HIGH, GRID_CENTER_OFFSET
+from smart_crane.core.constants import (
+    DEFAULT_Z_HIGH,
+    GRID_CENTER_OFFSET,
+    MARK_OBS_EPS,
+    CACHE_ROUND_DIGITS,
+    TIME_MS_MULTIPLIER,
+    TIME_FMT_PREC,
+    GRID_OCCUPIED,
+    GRID_FREE,
+)
 
 # 类型别名
 Grid2D = List[List[int]]
@@ -37,7 +46,7 @@ class WorkshopMapManager:
         width_m: float,
         length_m: float,
         resolution_m: float,
-        height_m: float = 20.0,
+        height_m: float = DEFAULT_Z_HIGH,
         logger: Optional[logging.Logger] = None,
     ):
         """初始化地图管理器。
@@ -85,8 +94,7 @@ class WorkshopMapManager:
                     self.rust_map = None
 
         self.logger.info(
-            f"初始化完成. 尺寸: {self.cols}x{self.rows}x{self.layers}, "
-            f"分辨率: {self.resolution_m}m, 模式: {'Rust加速' if self.rust_map else 'Python原生'}"
+            f"初始化完成。尺寸: {self.cols}x{self.rows}x{self.layers}，分辨率: {self.resolution_m}m，模式: {'Rust加速' if self.rust_map else 'Python原生'}"
         )
 
     @property
@@ -293,7 +301,7 @@ class WorkshopMapManager:
     def _mark_obstacle_area(self, grid: Grid2D, x: float, y: float, w: float, h: float):
         """[内部] 在 2D 网格上标记障碍物区域（仅 Python 模式使用）。"""
         r_s, c_s, _ = self.world_to_grid(x, y)
-        r_e, c_e, _ = self.world_to_grid(x + w - 0.01, y + h - 0.01)
+        r_e, c_e, _ = self.world_to_grid(x + w - MARK_OBS_EPS, y + h - MARK_OBS_EPS)
         r_s, r_e = max(0, r_s), min(self.rows - 1, r_e)
         c_s, c_e = max(0, c_s), min(self.cols - 1, c_e)
         for r in range(r_s, r_e + 1):
@@ -315,7 +323,7 @@ class WorkshopMapManager:
         """
         with self._lock:
             # 缓存键值需要包含所有参数
-            key = (round(xy_margin, 3), check_z, round(z_margin, 3))
+            key = (round(xy_margin, CACHE_ROUND_DIGITS), check_z, round(z_margin, CACHE_ROUND_DIGITS))
             if key in self._inflated_grid_caches:
                 return self._inflated_grid_caches[key]
 
@@ -338,16 +346,16 @@ class WorkshopMapManager:
                 t_total = time.perf_counter()
 
                 self.logger.info(
-                    f"[MapManager] Rust 2D 网格生成完毕. "
-                    f"Rust计算: {(t_rust_calc - t_start)*1000:.2f}ms, "
-                    f"数据转换: {(t_total - t_rust_calc)*1000:.2f}ms"
+                    f"[MapManager] Rust 2D 网格生成完毕。"
+                    f" Rust计算: {(t_rust_calc - t_start)*TIME_MS_MULTIPLIER:.{TIME_FMT_PREC}f}ms，"
+                    f" 数据转换: {(t_total - t_rust_calc)*TIME_MS_MULTIPLIER:.{TIME_FMT_PREC}f}ms"
                 )
 
                 self._inflated_grid_caches[key] = inflated
                 return inflated
 
             # 2. Python 原生路径
-            base_grid = [[0 for _ in range(self.cols)] for _ in range(self.rows)]
+            base_grid = [[GRID_FREE for _ in range(self.cols)] for _ in range(self.rows)]
             all_obs = list(self.static_obstacles.values()) + list(
                 self.dynamic_obstacles.values()
             )
@@ -367,8 +375,7 @@ class WorkshopMapManager:
 
             t_total = time.perf_counter()
             self.logger.info(
-                f"[MapManager] Python 2D 网格生成完毕. "
-                f"总耗时: {(t_total - t_start)*1000:.2f}ms"
+                f"[MapManager] Python 2D 网格生成完毕。 总耗时: {(t_total - t_start)*TIME_MS_MULTIPLIER:.{TIME_FMT_PREC}f}ms"
             )
 
             self._inflated_grid_caches[key] = inflated
@@ -394,9 +401,9 @@ class WorkshopMapManager:
         """
         with self._lock:
             key = (
-                round(xy_margin, 3),
-                round(z_margin_obs, 3),
-                round(z_margin_ceil, 3),
+                round(xy_margin, CACHE_ROUND_DIGITS),
+                round(z_margin_obs, CACHE_ROUND_DIGITS),
+                round(z_margin_ceil, CACHE_ROUND_DIGITS),
                 is_infinite,
             )
             if key in self._3d_grid_caches:
@@ -418,9 +425,9 @@ class WorkshopMapManager:
 
                 t_total = time.perf_counter()
                 self.logger.info(
-                    f"[MapManager] Rust 3D 网格生成完毕. "
-                    f"Rust计算: {(t_rust_calc - t_start)*1000:.2f}ms, "
-                    f"数据转换: {(t_total - t_rust_calc)*1000:.2f}ms"
+                    f"[MapManager] Rust 3D 网格生成完毕。"
+                    f" Rust计算: {(t_rust_calc - t_start)*TIME_MS_MULTIPLIER:.{TIME_FMT_PREC}f}ms，"
+                    f" 数据转换: {(t_total - t_rust_calc)*TIME_MS_MULTIPLIER:.{TIME_FMT_PREC}f}ms"
                 )
 
                 self._3d_grid_caches[key] = grid_3d
@@ -444,7 +451,7 @@ class WorkshopMapManager:
 
             t_total = time.perf_counter()
             self.logger.info(
-                f"[MapManager] Python 3D 网格生成完毕. 总耗时: {(t_total - t_start)*1000:.2f}ms"
+                f"[MapManager] Python 3D 网格生成完毕。 总耗时: {(t_total - t_start)*TIME_MS_MULTIPLIER:.{TIME_FMT_PREC}f}ms"
             )
 
             self._3d_grid_caches[key] = grid_3d

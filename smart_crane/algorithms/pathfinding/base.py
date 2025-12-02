@@ -4,6 +4,11 @@ import threading
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict, Any, Optional, Union, TypeVar, Generic
 from contextlib import contextmanager
+from smart_crane.core.constants import (
+    DEFAULT_RESOLUTION,
+    GRID_OCCUPIED,
+    PERFORMANCE_WARNING_THRESHOLD_MS,
+)
 
 # 类型定义
 Point2D = Tuple[int, int]
@@ -34,7 +39,7 @@ class PathPlannerBase(ABC, Generic[NodeType]):
         width_m: float,
         length_m: float,
         height_m: float = 0.0,
-        resolution: float = 0.5,
+        resolution: float = DEFAULT_RESOLUTION,
         logger: Optional[logging.Logger] = None,
         grid_lock: Optional[threading.RLock] = None,
     ):
@@ -203,11 +208,11 @@ class PathPlannerBase(ABC, Generic[NodeType]):
         Returns:
             bool: True 表示是障碍物，False 表示可行。
         """
-        # 注意：这里假设网格中 1 代表障碍物
+        # 注意：这里假设网格中 GRID_OCCUPIED 表示障碍物
         if len(p) == 2:
-            return self.grid[p[0]][p[1]] == 1
+            return self.grid[p[0]][p[1]] == GRID_OCCUPIED
         elif len(p) == 3:
-            return self.grid[p[0]][p[1]][p[2]] == 1
+            return self.grid[p[0]][p[1]][p[2]] == GRID_OCCUPIED
         return True
 
     def is_safe(self, p: Union[Point2D, Point3D]) -> bool:
@@ -227,7 +232,7 @@ class PathPlannerBase(ABC, Generic[NodeType]):
             self.stats["timestamp"] = time.time()
 
             # 仅在耗时异常时打印日志，避免刷屏
-            if elapsed_ms > 200.0:
+            if elapsed_ms > PERFORMANCE_WARNING_THRESHOLD_MS:
                 self.logger.warning(
                     f"性能告警: 耗时 {elapsed_ms:.2f}ms "
                     f"(Explored: {self.stats.get('nodes_expanded', 'N/A')})"

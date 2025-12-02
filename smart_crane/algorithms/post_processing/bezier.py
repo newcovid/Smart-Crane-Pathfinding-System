@@ -4,7 +4,17 @@ from typing import List, Optional, TYPE_CHECKING
 
 from .base import PathPostProcessor, CollisionChecker, NodeType
 from smart_crane.core.rust_bridge import RustBackend
-from smart_crane.core.constants import SHAPE_CIRCLE
+from smart_crane.core.constants import (
+    SHAPE_CIRCLE,
+    DEFAULT_BEZIER_SMOOTHNESS,
+    DEFAULT_BEZIER_SEGMENTS,
+    DEFAULT_BEZIER_ATTEMPTS,
+    BEZIER_CHECK_STEP_MULTIPLIER,
+    BEZIER_MIN_STEPS,
+    PATH_MIN_NODES,
+    RESOLUTION_HALF_FACTOR,
+    FOOTPRINT_HALF_DIVISOR,
+)
 
 if TYPE_CHECKING:
     from smart_crane.core.map_manager import WorkshopMapManager
@@ -25,8 +35,8 @@ class BezierSmoothProcessor(PathPostProcessor):
         self,
         map_mgr: Optional["WorkshopMapManager"] = None,
         settings: Optional["Settings"] = None,
-        smoothness: float = 0.3,
-        segments: int = 10,
+        smoothness: float = DEFAULT_BEZIER_SMOOTHNESS,
+        segments: int = DEFAULT_BEZIER_SEGMENTS,
         logger: Optional[logging.Logger] = None,
     ):
         """初始化平滑器。
@@ -53,7 +63,7 @@ class BezierSmoothProcessor(PathPostProcessor):
         self, path: List[NodeType], is_safe_fn: CollisionChecker
     ) -> List[NodeType]:
         """执行贝塞尔平滑逻辑。"""
-        if not path or len(path) < 3:
+        if not path or len(path) < PATH_MIN_NODES:
             return path
 
         # =====================================================================
@@ -74,12 +84,14 @@ class BezierSmoothProcessor(PathPostProcessor):
                     w = self.settings.crane.footprint_width
                     l = self.settings.crane.footprint_length
                     radius_m = (
-                        (w / 2.0) if shape == SHAPE_CIRCLE else (math.hypot(w, l) / 2.0)
+                        (w / FOOTPRINT_HALF_DIVISOR)
+                        if shape == SHAPE_CIRCLE
+                        else (math.hypot(w, l) / FOOTPRINT_HALF_DIVISOR)
                     )
-                    radius_m += self.map_mgr.resolution_m / 2.0
+                    radius_m += self.map_mgr.resolution_m * RESOLUTION_HALF_FACTOR
                     z_margin = (
                         self.settings.crane.z_safety_margin
-                        + self.settings.crane.footprint_height / 2.0
+                        + self.settings.crane.footprint_height / FOOTPRINT_HALF_DIVISOR
                     )
                     is_infinite = self.settings.crane.obstacle_infinite_height
 
@@ -119,7 +131,7 @@ class BezierSmoothProcessor(PathPostProcessor):
             current_smoothness = self.default_smoothness
             best_segment = None
 
-            for attempt in range(5):
+            for attempt in range(DEFAULT_BEZIER_ATTEMPTS):
                 if self._check_curve_safety(p0, p1, p2, current_smoothness, is_safe_fn):
                     best_segment = self._generate_curve(p0, p1, p2, current_smoothness)
                     if attempt > 0:
@@ -162,8 +174,8 @@ class BezierSmoothProcessor(PathPostProcessor):
         d2 = math.sqrt(sum((p2[d] - p1[d]) ** 2 for d in range(dims)))
         total_len = (d1 + d2) * s
 
-        steps = int(total_len * 5)
-        steps = max(steps, 5)
+        steps = int(total_len * BEZIER_CHECK_STEP_MULTIPLIER)
+        steps = max(steps, BEZIER_MIN_STEPS)
 
         for k in range(steps + 1):
             t = k / steps

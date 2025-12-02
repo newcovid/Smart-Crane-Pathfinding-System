@@ -13,6 +13,9 @@ from typing import (
     TYPE_CHECKING,
 )
 
+# 导入常量
+from smart_crane.core.constants import PERFORMANCE_WARNING_THRESHOLD_MS
+
 if TYPE_CHECKING:
     from smart_crane.core.map_manager import WorkshopMapManager
     from smart_crane.core.config import Settings
@@ -156,7 +159,7 @@ class PathPostProcessor(ABC):
             f"节点: {input_len}->{output_len} (Rate: {self.stats['reduction_rate']:.1%})"
         )
 
-        if elapsed_ms > 50.0:
+        if elapsed_ms > PERFORMANCE_WARNING_THRESHOLD_MS:
             self.logger.warning(f"性能告警: {log_msg}")
         else:
             self.logger.debug(log_msg)

@@ -12,6 +12,8 @@ from smart_crane.algorithms.components.grid_adapter import GridAdapter
 from smart_crane.algorithms.components.planner_factory import PlannerFactory
 from smart_crane.algorithms.components.safety_guard import SafetyGuard
 
+from smart_crane.core import constants
+
 # 类型别名
 Point3D = Tuple[float, float, float]
 
@@ -112,7 +114,7 @@ class TrajectoryPlanner:
             )
 
             # 统计耗时
-            elapsed = (time.perf_counter() - t_start) * 1000
+            elapsed = (time.perf_counter() - t_start) * constants.TIME_MS_MULTIPLIER
             self._pending_grid_prep_ms += elapsed
 
             algo_type = self.settings.planner.algorithm
@@ -176,7 +178,7 @@ class TrajectoryPlanner:
                     self.settings, old_grid, plan_grid, (x, y, w, h, z)
                 )
                 t4 = time.perf_counter()
-                t_diff = (t4 - t3) * 1000
+                t_diff = (t4 - t3) * constants.TIME_MS_MULTIPLIER
 
                 if changes:
                     self.logger.debug(f"触发增量更新: {len(changes)} 处网格变化。")
@@ -184,18 +186,18 @@ class TrajectoryPlanner:
                     t5 = time.perf_counter()
                     self.core_planner.update_obstacles(changes)
                     t6 = time.perf_counter()
-                    t_algo = (t6 - t5) * 1000
+                    t_algo = (t6 - t5) * constants.TIME_MS_MULTIPLIER
             else:
                 self.logger.debug("跳过增量更新 (算法不支持或无活跃任务)。")
 
             # 打印详细耗时分析
-            t_grid_rebuild = (t2 - t1) * 1000
+            t_grid_rebuild = (t2 - t1) * constants.TIME_MS_MULTIPLIER
             self.logger.debug(
                 f"[Perf] HandleUpdate: GridRebuild={t_grid_rebuild:.2f}ms, "
                 f"Diff={t_diff:.2f}ms, AlgoUpdate={t_algo:.2f}ms"
             )
 
-        elapsed = (time.perf_counter() - t_start) * 1000
+        elapsed = (time.perf_counter() - t_start) * constants.TIME_MS_MULTIPLIER
         self._pending_grid_prep_ms += elapsed
 
     def plan(
@@ -249,7 +251,7 @@ class TrajectoryPlanner:
 
                 stats["timings"]["grid_prep_ms"] = (
                     time.perf_counter() - t_grid_start
-                ) * 1000 + pending_cost
+                ) * constants.TIME_MS_MULTIPLIER + pending_cost
 
                 stats["grid_meta"] = {
                     "dims": [
@@ -312,7 +314,7 @@ class TrajectoryPlanner:
 
                 stats["timings"]["pathfinding_ms"] = (
                     time.perf_counter() - t_algo_start
-                ) * 1000
+                ) * constants.TIME_MS_MULTIPLIER
                 stats.update(self.core_planner.get_stats())
 
                 if not raw_path:
@@ -396,7 +398,10 @@ class TrajectoryPlanner:
                         )
 
                         # 只有当脱困点距离起点有一定距离时才添加，避免重合
-                        if self._dist_sq(exact_start, esc_pt_low) > 0.0001:
+                        if (
+                            self._dist_sq(exact_start, esc_pt_low)
+                            > constants.PATH_MIN_SEPARATION_SQ
+                        ):
                             final_path.append(esc_pt_low)
 
                         # 1.3 加入脱困点 (高空/巡航层)
@@ -418,7 +423,10 @@ class TrajectoryPlanner:
                         )
 
                         # 只有当高度差显著时才添加
-                        if abs(exact_start[2] - cruise_z) > 0.01:
+                        if (
+                            abs(exact_start[2] - cruise_z)
+                            > constants.PATH_MIN_HEIGHT_DIFF
+                        ):
                             final_path.append(start_pt_cruise)
 
                     # === 2. Cruise Phase (巡航阶段) ===
@@ -430,7 +438,7 @@ class TrajectoryPlanner:
                         if (
                             not final_path
                             or self._dist_sq(final_path[-1], opt_cruise_path[0])
-                            > 0.0001
+                            > constants.PATH_MIN_SEPARATION_SQ
                         ):
                             final_path.append(opt_cruise_path[0])
 
@@ -440,12 +448,13 @@ class TrajectoryPlanner:
 
                     if (
                         not final_path
-                        or self._dist_sq(final_path[-1], end_pt_cruise) > 0.0001
+                        or self._dist_sq(final_path[-1], end_pt_cruise)
+                        > constants.PATH_MIN_SEPARATION_SQ
                     ):
                         final_path.append(end_pt_cruise)
 
                     # 3.2 降落到终点
-                    if abs(exact_end[2] - cruise_z) > 0.01:
+                    if abs(exact_end[2] - cruise_z) > constants.PATH_MIN_HEIGHT_DIFF:
                         final_path.append(exact_end)
 
                 else:
@@ -457,7 +466,8 @@ class TrajectoryPlanner:
                     # 1. 补起点 (防止 path 被过度优化或脱困导致缺失)
                     if (
                         opt_cruise_path
-                        and self._dist_sq(exact_start, opt_cruise_path[0]) > 0.0001
+                        and self._dist_sq(exact_start, opt_cruise_path[0])
+                        > constants.PATH_MIN_SEPARATION_SQ
                     ):
                         final_path.append(exact_start)
 
@@ -467,25 +477,31 @@ class TrajectoryPlanner:
                     # 3. 补终点
                     if (
                         opt_cruise_path
-                        and self._dist_sq(exact_end, opt_cruise_path[-1]) > 0.0001
+                        and self._dist_sq(exact_end, opt_cruise_path[-1])
+                        > constants.PATH_MIN_SEPARATION_SQ
                     ):
                         final_path.append(exact_end)
 
-                # 最终清理：移除极其微小的抖动点，并保留两位小数
-                final_path = self._deduplicate_path(final_path)
-                final_path = [tuple(round(v, 2) for v in pt) for pt in final_path]
+                # 最终清理：移除极其微小的抖动点，并保留指定小数位
+                final_path = self._deduplicate_path(
+                    final_path, tolerance=constants.DEFAULT_DEDUP_TOLERANCE
+                )
+                final_path = [
+                    tuple(round(v, constants.PATH_COORD_ROUND_DIGITS) for v in pt)
+                    for pt in final_path
+                ]
 
                 stats["timings"]["splicing_ms"] = (
                     time.perf_counter() - t_splice_start
-                ) * 1000
+                ) * constants.TIME_MS_MULTIPLIER
                 stats["timings"]["total_ms"] = (
                     time.perf_counter() - t_total_start
-                ) * 1000 + pending_cost
+                ) * constants.TIME_MS_MULTIPLIER + pending_cost
                 stats["path_meta"]["final_nodes"] = len(final_path)
 
-                msg = f"Success ({'; '.join(msg_list)})" if msg_list else "Success"
+                msg = f"成功 ({'; '.join(msg_list)})" if msg_list else "成功"
                 self.logger.info(
-                    f"规划完成. 节点数: {len(final_path)}, 总耗时: {stats['timings']['total_ms']:.1f}ms"
+                    f"规划完成。节点数: {len(final_path)}, 总耗时: {stats['timings']['total_ms']:.{constants.TIME_FMT_PREC}f}ms"
                 )
 
                 return final_path, stats, msg
@@ -499,7 +515,7 @@ class TrajectoryPlanner:
         return (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2 + (p1[2] - p2[2]) ** 2
 
     def _deduplicate_path(
-        self, path: List[Point3D], tolerance: float = 0.01
+        self, path: List[Point3D], tolerance: float = constants.DEFAULT_DEDUP_TOLERANCE
     ) -> List[Point3D]:
         """移除路径中重复或极近的连续点。
 

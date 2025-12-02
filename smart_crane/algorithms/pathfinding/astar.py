@@ -5,7 +5,19 @@ from typing import List, Tuple, Dict, Optional, Set, Any
 
 from .base import PathPlannerBase, NodeType
 from smart_crane.core.rust_bridge import RustBackend
-from smart_crane.core.constants import SQRT_2, SQRT_3, EPSILON, INF
+from smart_crane.core.constants import (
+    SQRT_2,
+    SQRT_3,
+    EPSILON,
+    INF,
+    A_STAR_DEFAULT_RESOLUTION,
+    A_STAR_MOVE_COST_CARDINAL,
+    A_STAR_INIT_F_SCORE,
+    A_STAR_RECONSTRUCT_SAFE_MARGIN,
+    DSLITE_DEFAULT_MAX_NODES,
+    DSLITE_MAX_NODES_MULTIPLIER,
+    DSLITE_DEFAULT_HEURISTIC_MIN_WEIGHT,
+)
 
 
 class AStarPlanner(PathPlannerBase[NodeType]):
@@ -21,7 +33,7 @@ class AStarPlanner(PathPlannerBase[NodeType]):
         width_m: float,
         length_m: float,
         height_m: float = 0.0,
-        resolution: float = 0.5,
+        resolution: float = A_STAR_DEFAULT_RESOLUTION,
         logger: Optional[logging.Logger] = None,
         grid_lock=None,
         use_octile_3d: bool = False,
@@ -48,20 +60,26 @@ class AStarPlanner(PathPlannerBase[NodeType]):
         self.rust_planner = None
         self.enable_rust = enable_rust
         self.use_octile_3d = use_octile_3d
-        self.heuristic_weight = max(1.0, heuristic_weight)
+        # 最小启发式权重由常量控制，防止权重小于 1
+        self.heuristic_weight = max(
+            DSLITE_DEFAULT_HEURISTIC_MIN_WEIGHT, heuristic_weight
+        )
 
         self.start_node: Optional[NodeType] = None
         self.goal_node: Optional[NodeType] = None
 
         # 移动代价常量
-        self.COST_1 = 1.0
+        self.COST_1 = A_STAR_MOVE_COST_CARDINAL
         self.COST_2 = SQRT_2
         self.COST_3 = SQRT_3
 
         # 计算最大扩展节点数，作为熔断机制防止死循环
         layers_count = self.layers if self.layers > 0 else 1
         total_grid_size = self.rows * self.cols * layers_count
-        self.max_nodes_expanded = max(5000, total_grid_size * 5)
+        # 使用集中常量来计算最大扩展节点数（作为熔断保护）
+        self.max_nodes_expanded = max(
+            DSLITE_DEFAULT_MAX_NODES, total_grid_size * DSLITE_MAX_NODES_MULTIPLIER
+        )
 
         # 尝试加载 Rust 核心
         if RustBackend.is_available() and self.enable_rust:
@@ -205,7 +223,7 @@ class AStarPlanner(PathPlannerBase[NodeType]):
 
         # OpenSet: 优先队列 (f_score, node)
         open_set: List[Tuple[float, NodeType]] = []
-        heapq.heappush(open_set, (0.0, start_node))
+        heapq.heappush(open_set, (A_STAR_INIT_F_SCORE, start_node))
 
         # 记录路径来源
         came_from: Dict[NodeType, NodeType] = {}
@@ -346,7 +364,7 @@ class AStarPlanner(PathPlannerBase[NodeType]):
         """从最终节点回溯重建路径。"""
         path = [current]
         # 防止死循环的安全上限
-        max_steps = len(came_from) + 100
+        max_steps = len(came_from) + A_STAR_RECONSTRUCT_SAFE_MARGIN
         steps = 0
         while current in came_from:
             current = came_from[current]
