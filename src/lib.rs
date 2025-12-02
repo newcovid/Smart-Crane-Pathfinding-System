@@ -1,8 +1,11 @@
 use pyo3::prelude::*;
 
 mod common;
+// 注册 map 模块
+mod map;
 mod pathfinding;
 
+use map::RustMapManager;
 use pathfinding::astar::RustAStarPlanner;
 use pathfinding::dslite::RustDLitePlanner;
 
@@ -16,5 +19,7 @@ fn smart_crane_core(m: &Bound<PyModule>) -> PyResult<()> {
 
     m.add_class::<RustAStarPlanner>()?;
     m.add_class::<RustDLitePlanner>()?;
+    // 导出地图管理器
+    m.add_class::<RustMapManager>()?;
     Ok(())
 }

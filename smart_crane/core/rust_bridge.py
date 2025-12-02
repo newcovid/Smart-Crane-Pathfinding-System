@@ -79,33 +79,29 @@ class RustBackend:
         return None
 
     # =========================================================================
-    # 地图/网格相关 (Map Core) - 预留接口
+    # 地图/网格相关 (Map Core)
     # =========================================================================
 
     @staticmethod
-    def get_map_processor_class() -> Optional[Type[Any]]:
-        """[Future] 获取 Rust 版网格计算器。
+    def get_map_manager_class() -> Optional[Type[Any]]:
+        """获取 Rust 版地图管理器类。
 
-        用于替代 Python 层的 GridFactory，将大规模矩阵运算下沉至 Rust。
+        该类集成了障碍物管理与高性能网格生成（EDT/Voxelization）。
 
         Returns:
-            Optional[Type[Any]]: `RustMapProcessor` 类或 None。
+            Optional[Type[Any]]: `RustMapManager` 类或 None。
         """
-        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustMapProcessor"):
-            return _rust_module.RustMapProcessor
+        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustMapManager"):
+            return _rust_module.RustMapManager
         return None
 
     # =========================================================================
-    # 后处理相关 (Post Processing) - 预留接口
+    # 后处理相关 (Post Processing)
     # =========================================================================
 
     @staticmethod
     def get_post_processor_functions() -> Optional[Any]:
-        """[Future] 获取 Rust 版路径平滑算法库。
-
-        Returns:
-            Optional[Any]: 包含 `greedy_shortcut` 或 `bezier_smooth` 的模块/对象。
-        """
+        """[Future] 获取 Rust 版路径平滑算法库。"""
         if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "post_processing"):
             return _rust_module.post_processing
         return None

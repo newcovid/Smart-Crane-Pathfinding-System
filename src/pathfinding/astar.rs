@@ -1,4 +1,6 @@
 use crate::common::{parse_python_grid, FlatGrid, Node};
+// 引入公共常量
+use crate::common::{COST_1, COST_2, COST_3, EPSILON};
 use ordered_float::NotNan;
 use pyo3::prelude::*;
 use std::cmp::Ordering;
@@ -6,16 +8,6 @@ use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 // 引入日志宏
 use log::{debug, info, warn};
-
-// --- 常量定义 ---
-/// 直线移动代价 (1.0)
-const COST_1: f32 = 1.0;
-/// 对角线移动代价 (sqrt(2) ≈ 1.414)
-const COST_2: f32 = 1.41421356;
-/// 3D 对角线移动代价 (sqrt(3) ≈ 1.732)
-const COST_3: f32 = 1.73205081;
-/// 浮点数比较的微小误差容忍度
-const EPSILON: f32 = 1e-4;
 
 /// A* 算法优先队列中的元素。
 ///

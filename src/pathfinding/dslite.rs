@@ -1,21 +1,13 @@
 use crate::common::{parse_python_grid, FlatGrid, Node};
+// 引入公共常量
+use crate::common::{COST_1, COST_2, COST_3, EPSILON, FLOAT_TOLERANCE, INF};
 use ordered_float::NotNan;
 use pyo3::prelude::*;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-// 引入日志
+// 引入日志宏
 use log::{debug, info, warn};
-
-// --- 常量定义 ---
-const COST_1: f32 = 1.0;
-const COST_2: f32 = 1.41421356;
-const COST_3: f32 = 1.73205081;
-const INF: f32 = f32::INFINITY;
-/// 用于比较浮点数相等性的极小值 (equality check)
-const EPSILON: f32 = 1e-4;
-/// 用于比较 Key 大小的宽松容差 (inequality check)，提供数值稳定性
-const FLOAT_TOLERANCE: f32 = 1e-3;
 
 /// D* Lite 的优先队列键值 (Keys)。
 ///
