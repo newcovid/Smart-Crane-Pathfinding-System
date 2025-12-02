@@ -12,17 +12,19 @@ use std::collections::HashMap;
 #[pyclass]
 pub struct RustMapManager {
     // --- 物理属性 ---
-    width_m: f32,
-    length_m: f32,
-    height_m: f32,
-    resolution_m: f32,
+    // [Fix] 将字段设为 pub 以便 components 模块访问
+    pub width_m: f32,
+    pub length_m: f32,
+    pub height_m: f32,
+    pub resolution_m: f32,
 
     // --- 网格属性 ---
-    rows: i32,
-    cols: i32,
-    layers: i32,
+    pub rows: i32,
+    pub cols: i32,
+    pub layers: i32,
 
     // --- 障碍物数据库 ---
+    // 保持私有，通过方法操作
     static_obstacles: HashMap<String, Obstacle>,
     dynamic_obstacles: HashMap<String, Obstacle>,
 }
@@ -150,6 +152,10 @@ impl RustMapManager {
             let closest_y = y.clamp(o.y_m, o.y_m + o.h_m);
             let dist_sq = (x - closest_x).powi(2) + (y - closest_y).powi(2);
 
+            // 注意：Rust 这里使用严格小于 (<)。
+            // 如果 xy_margin 为 0 (硬碰撞检测) 且点在内部 (dist_sq 为 0)，0 < 0 为 False。
+            // 因此，调用者如果想检测硬碰撞，必须传入一个微小的 xy_margin (如 1e-4)。
+            // 对于安全脱困 (Smart Escape) 场景，xy_margin 包含了安全半径，远大于 0，所以没有问题。
             if dist_sq < xy_margin_sq {
                 if ignore_z {
                     return true;

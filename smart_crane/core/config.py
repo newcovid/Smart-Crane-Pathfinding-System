@@ -118,7 +118,7 @@ class AppSettings(BaseSettings):
     """
 
     secret_key: str = Field("dev_secret_key_123", alias="SECRET_KEY")
-    log_level: str = Field("DEBUG", alias="LOG_LEVEL")
+    log_level: str = Field("INFO", alias="LOG_LEVEL")
 
 
 class Settings(BaseSettings):

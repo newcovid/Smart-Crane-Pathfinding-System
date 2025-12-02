@@ -100,8 +100,18 @@ class RustBackend:
     # =========================================================================
 
     @staticmethod
-    def get_post_processor_functions() -> Optional[Any]:
-        """[Future] 获取 Rust 版路径平滑算法库。"""
-        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "post_processing"):
-            return _rust_module.post_processing
+    def get_post_processor_class() -> Optional[Any]:
+        """获取 Rust 版后处理器工厂类。
+
+        该类提供静态方法 `greedy_shortcut` 和 `bezier_smooth`。
+
+        Returns:
+            Optional[Any]: `RustPostProcessor` 类或 None。
+        """
+        if (
+            HAS_RUST_CORE
+            and _rust_module
+            and hasattr(_rust_module, "RustPostProcessor")
+        ):
+            return _rust_module.RustPostProcessor
         return None

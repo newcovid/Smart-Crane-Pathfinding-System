@@ -3,7 +3,7 @@ import logging
 from typing import Tuple, Optional, Callable, Union, List, TYPE_CHECKING
 
 from smart_crane.core.config import Settings
-from smart_crane.core.constants import SHAPE_CIRCLE
+from smart_crane.core.constants import SHAPE_CIRCLE, EPSILON
 
 if TYPE_CHECKING:
     from smart_crane.core.map_manager import WorkshopMapManager
@@ -75,17 +75,27 @@ class SafetyGuard:
         crane_h = settings.crane.footprint_height
         z_margin = z_safety + (crane_h / 2.0)
 
+        # 物理硬碰撞检测阈值
+        # 必须使用非零的微小 Epsilon，否则当点完全在障碍物内部时，
+        # dist_sq (0) < margin_sq (0) 会判定为 False，导致漏检。
+        hard_eps = EPSILON
+
         # 1. 物理硬碰撞检测 (Hard Collision)
         # 起点和终点都不能位于障碍物实体内部
         if self.map_mgr.check_collision_raw(
-            start_pt[0], start_pt[1], start_pt[2], 0, 0, ignore_z=False
+            start_pt[0],
+            start_pt[1],
+            start_pt[2],
+            hard_eps,
+            hard_eps,
+            ignore_z=False,
         ):
             msg = "起点位于障碍物内部 (硬碰撞)，任务拒绝。"
             self.logger.error(msg)
             return False, msg, False
 
         if self.map_mgr.check_collision_raw(
-            end_pt[0], end_pt[1], end_pt[2], 0, 0, ignore_z=False
+            end_pt[0], end_pt[1], end_pt[2], hard_eps, hard_eps, ignore_z=False
         ):
             msg = "终点位于障碍物内部 (硬碰撞)，任务拒绝。"
             self.logger.error(msg)

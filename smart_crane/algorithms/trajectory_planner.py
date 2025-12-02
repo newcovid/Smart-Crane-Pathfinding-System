@@ -106,8 +106,9 @@ class TrajectoryPlanner:
             )
 
             # 3. 创建后处理管道
+            # [Fix] 显式传递 map_mgr 给工厂，以便注入到 PostProcessors 中
             self.post_processors = PlannerFactory.create_post_processors(
-                self.settings, self.logger
+                self.settings, self.map_mgr, self.logger
             )
 
             # 统计耗时
@@ -342,7 +343,7 @@ class TrajectoryPlanner:
                 # 警告：不要将垂直起降段放入后处理器，否则贝塞尔平滑可能会切角导致碰撞
                 opt_cruise_path = path_cruise
 
-                # 创建一个针对巡航层的碰撞检测器
+                # 创建一个针对巡航层的碰撞检测器 (用于 Python 回退模式)
                 if path_cruise:
                     cruise_checker = self.safety_guard.create_collision_checker(
                         path_cruise[0], path_cruise[-1], self.settings

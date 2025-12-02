@@ -40,8 +40,6 @@ class PlannerFactory:
     ) -> PathPlannerBase:
         """创建核心路径规划器实例。
 
-        根据配置选择 A* 或 D* Lite 算法，并注入必要的环境依赖。
-
         Args:
             settings (Settings): 全局配置对象。
             grid (Grid): 用于规划的网格数据（2D 或 3D）。
@@ -86,14 +84,18 @@ class PlannerFactory:
 
     @staticmethod
     def create_post_processors(
-        settings: Settings, logger: Optional[logging.Logger] = None
+        settings: Settings,
+        map_mgr: "WorkshopMapManager",
+        logger: Optional[logging.Logger] = None,
     ) -> List[PathPostProcessor]:
         """创建后处理管道列表。
 
         根据配置决定启用哪些路径平滑或优化器。
+        在此注入 MapManager 和 Settings，以便后处理器能调用 Rust 核心。
 
         Args:
             settings (Settings): 全局配置对象。
+            map_mgr (WorkshopMapManager): 地图管理器（必须提供）。
             logger (Optional[logging.Logger]): 父级日志记录器。
 
         Returns:
@@ -110,14 +112,19 @@ class PlannerFactory:
         # 1. 贪婪捷径优化 (通常放在第一步，大幅减少节点数)
         if settings.post_process.enable_shortcut:
             factory_logger.debug("启用后处理: GreedyShortcutProcessor")
-            # 将父级 logger 传递给子组件
-            processors.append(GreedyShortcutProcessor(logger=logger))
+            processors.append(
+                GreedyShortcutProcessor(
+                    map_mgr=map_mgr, settings=settings, logger=logger
+                )
+            )
 
         # 2. 贝塞尔平滑 (通常放在最后，美化路径)
         if settings.post_process.enable_bezier:
             factory_logger.debug("启用后处理: BezierSmoothProcessor")
             processors.append(
                 BezierSmoothProcessor(
+                    map_mgr=map_mgr,
+                    settings=settings,
                     smoothness=settings.post_process.bezier_smoothness,
                     segments=settings.post_process.bezier_segments,
                     logger=logger,

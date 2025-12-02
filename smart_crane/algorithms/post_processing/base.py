@@ -1,16 +1,30 @@
 import time
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Callable, TypeVar, Tuple, Union, Dict, Any, Optional
+from typing import (
+    List,
+    Callable,
+    TypeVar,
+    Tuple,
+    Union,
+    Dict,
+    Any,
+    Optional,
+    TYPE_CHECKING,
+)
+
+if TYPE_CHECKING:
+    from smart_crane.core.map_manager import WorkshopMapManager
+    from smart_crane.core.config import Settings
 
 # =============================================================================
 # 1. 类型定义 (Type Definitions)
 # =============================================================================
 
-Point2D = Tuple[int, int]
-Point3D = Tuple[int, int, int]
-# 泛型节点类型，兼容 2D 和 3D 坐标
-NodeType = TypeVar("NodeType", Point2D, Point3D)
+Point2D = Tuple[float, float]
+Point3D = Tuple[float, float, float]
+# 注意：后处理阶段通常处理的是物理坐标 (Float)，但也可能处理网格坐标 (Int)
+NodeType = TypeVar("NodeType", Point2D, Point3D, Tuple[float, ...])
 
 # 碰撞检测回调函数签名
 CollisionChecker = Callable[[Union[Point2D, Point3D]], bool]
@@ -31,21 +45,28 @@ class PathPostProcessor(ABC):
         name (str): 处理器名称。
         logger (logging.Logger): 专用的日志记录器。
         stats (Dict[str, Any]): 运行时性能指标。
+        map_mgr (WorkshopMapManager): 地图管理器引用 (用于访问 Rust 内核)。
+        settings (Settings): 全局配置引用 (用于计算物理参数)。
     """
 
     def __init__(
         self,
         name: str = "BaseProcessor",
+        map_mgr: Optional["WorkshopMapManager"] = None,
+        settings: Optional["Settings"] = None,
         logger: Optional[logging.Logger] = None,
     ):
         """初始化后处理器基类。
 
         Args:
             name (str): 处理器名称，用于日志标识。
+            map_mgr (Optional[WorkshopMapManager]): 地图管理器。
+            settings (Optional[Settings]): 全局配置。
             logger (Optional[logging.Logger]): 父级日志记录器。
-                                             如果提供，将创建子记录器 (Parent.Name)。
         """
         self.name = name
+        self.map_mgr = map_mgr
+        self.settings = settings
 
         # [日志优化] 智能嵌套
         if logger:
@@ -61,6 +82,7 @@ class PathPostProcessor(ABC):
             "output_nodes": 0,
             "reduction_rate": 0.0,
             "timestamp": 0.0,
+            "mode": "python",  # 记录运行模式: python 或 rust
         }
 
         self.logger.debug("处理器初始化就绪。")
@@ -86,8 +108,7 @@ class PathPostProcessor(ABC):
 
         Args:
             path (List[NodeType]): 原始路径节点列表。
-            is_safe_fn (CollisionChecker): 碰撞检测回调函数。
-                                           输入坐标 (x, y) 或 (x, y, z)，返回 True 表示安全。
+            is_safe_fn (CollisionChecker): 碰撞检测回调函数 (Python模式使用)。
 
         Returns:
             List[NodeType]: 优化后的路径节点列表。如果发生异常，返回原始路径。
@@ -129,8 +150,9 @@ class PathPostProcessor(ABC):
             self.stats["reduction_rate"] = 0.0
 
         # [性能日志]
+        mode = self.stats.get("mode", "unknown")
         log_msg = (
-            f"完成. 耗时: {elapsed_ms:.2f}ms, "
+            f"[{mode.upper()}] 完成. 耗时: {elapsed_ms:.2f}ms, "
             f"节点: {input_len}->{output_len} (Rate: {self.stats['reduction_rate']:.1%})"
         )
 
