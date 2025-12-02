@@ -251,8 +251,14 @@ const app = createApp({
         };
 
         const requestPlan = () => {
-            socket.emit('update_settings', state.settings);
-            socket.emit('request_path', { start: state.missionState.start, end: state.missionState.end });
+            // [优化] 将 settings 包含在 payload 中，确保后端原子化处理
+            const payload = {
+                start: state.missionState.start,
+                end: state.missionState.end,
+                settings: state.settings
+            };
+            // 移除单独的 update_settings 调用，避免异步竞态条件
+            socket.emit('request_path', payload);
         };
 
         const switchView = (mode) => {

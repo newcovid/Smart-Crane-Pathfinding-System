@@ -245,8 +245,21 @@ def handle_request_path(data: Dict[str, Any]) -> None:
     """
     处理路径规划请求。
     Args:
-        data (Dict[str, Any]): 包含起点/终点等任务参数。
+        data (Dict[str, Any]): 包含起点/终点等任务参数，以及可选的配置更新数据(settings)。
     """
+    # [优化] 1. 优先处理请求中携带的配置更新
+    # 这样确保了在同一逻辑流中，配置更新绝对先于路径规划完成
+    if "settings" in data:
+        logger.debug("规划请求包含配置数据，正在应用配置...")
+        success, msg = crane_service.update_configuration(data["settings"])
+        if not success:
+            logger.warning(f"规划前配置自动更新失败: {msg}")
+            # 配置失败通常不应阻塞规划（除非参数完全非法），这里选择记录日志并继续尝试规划
+        elif msg != "配置未发生变化":
+            # 如果配置确实变了，通知所有客户端更新地图状态
+            socketio.emit("update_map_state", crane_service.get_full_state())
+
+    # [优化] 2. 更新任务起终点
     if "start" in data or "end" in data:
         crane_service.update_mission_state(data)
         socketio.emit("sync_mission_coordinates", data, include_self=False)
@@ -255,6 +268,8 @@ def handle_request_path(data: Dict[str, Any]) -> None:
     path: list
     stats: dict
     msg: str
+
+    # [优化] 3. 执行规划
     path, stats, msg = crane_service.plan_path()
 
     if path:
