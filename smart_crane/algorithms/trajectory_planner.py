@@ -145,13 +145,15 @@ class TrajectoryPlanner:
         with self.grid_lock:
             old_grid = self.active_planning_grid
 
-            # 重新生成网格
+            # [性能埋点] 1. 网格重生成 (Grid Rebuild)
+            t1 = time.perf_counter()
             plan_grid, vis_grid, _ = self.grid_adapter.prepare_grids(self.settings)
             self.active_planning_grid = plan_grid
             self.visualization_grid = vis_grid
 
-            # 更新核心规划器的网格引用
+            # 更新核心规划器的网格引用 (这里可能会触发 Rust 侧的网格全量拷贝)
             self.core_planner.grid = plan_grid
+            t2 = time.perf_counter()
 
             # 检查是否可以执行增量更新
             supports_incremental = getattr(
@@ -164,16 +166,34 @@ class TrajectoryPlanner:
                 and getattr(self.core_planner, "goal_node", None) is not None
             )
 
+            t_diff = 0.0
+            t_algo = 0.0
+
             if supports_incremental and has_mission:
-                # 计算 Diff
+                # [性能埋点] 2. 差异计算 (Diff Calculation)
+                t3 = time.perf_counter()
                 changes = self.grid_adapter.calculate_incremental_changes(
                     self.settings, old_grid, plan_grid, (x, y, w, h, z)
                 )
+                t4 = time.perf_counter()
+                t_diff = (t4 - t3) * 1000
+
                 if changes:
                     self.logger.debug(f"触发增量更新: {len(changes)} 处网格变化。")
+                    # [性能埋点] 3. 算法增量更新 (Algo Update / Replanning)
+                    t5 = time.perf_counter()
                     self.core_planner.update_obstacles(changes)
+                    t6 = time.perf_counter()
+                    t_algo = (t6 - t5) * 1000
             else:
                 self.logger.debug("跳过增量更新 (算法不支持或无活跃任务)。")
+
+            # 打印详细耗时分析
+            t_grid_rebuild = (t2 - t1) * 1000
+            self.logger.debug(
+                f"[Perf] HandleUpdate: GridRebuild={t_grid_rebuild:.2f}ms, "
+                f"Diff={t_diff:.2f}ms, AlgoUpdate={t_algo:.2f}ms"
+            )
 
         elapsed = (time.perf_counter() - t_start) * 1000
         self._pending_grid_prep_ms += elapsed

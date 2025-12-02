@@ -2,6 +2,7 @@ import math
 import threading
 import copy
 import logging
+import time  # 引入 time 模块进行性能分析
 from typing import List, Tuple, Optional, Dict, Any
 
 from smart_crane.core.components.grid_factory import GridFactory
@@ -318,6 +319,8 @@ class WorkshopMapManager:
             if key in self._inflated_grid_caches:
                 return self._inflated_grid_caches[key]
 
+            t_start = time.perf_counter()
+
             # 1. Rust 加速路径
             if self.rust_map:
                 # [关键修复] Rust 返回的是 List[bytes]，前端 JSON 序列化需要 List[List[int]]
@@ -325,7 +328,20 @@ class WorkshopMapManager:
                 inflated_raw = self.rust_map.get_2d_projection_grid(
                     xy_margin, z_margin, check_z
                 )
+
+                t_rust_calc = time.perf_counter()
+
+                # 数据转换: List[bytes] -> List[List[int]]
+                # 警告：对于大地图，这一步可能比 Rust 计算本身还要慢
                 inflated = [list(row) for row in inflated_raw]
+
+                t_total = time.perf_counter()
+
+                self.logger.info(
+                    f"[MapManager] Rust 2D 网格生成完毕. "
+                    f"Rust计算: {(t_rust_calc - t_start)*1000:.2f}ms, "
+                    f"数据转换: {(t_total - t_rust_calc)*1000:.2f}ms"
+                )
 
                 self._inflated_grid_caches[key] = inflated
                 return inflated
@@ -347,6 +363,12 @@ class WorkshopMapManager:
             # 调用 GridFactory 进行膨胀计算
             inflated = GridFactory.create_inflated_grid_2d(
                 base_grid, xy_margin, self.logger
+            )
+
+            t_total = time.perf_counter()
+            self.logger.info(
+                f"[MapManager] Python 2D 网格生成完毕. "
+                f"总耗时: {(t_total - t_start)*1000:.2f}ms"
             )
 
             self._inflated_grid_caches[key] = inflated
@@ -380,13 +402,26 @@ class WorkshopMapManager:
             if key in self._3d_grid_caches:
                 return self._3d_grid_caches[key]
 
+            t_start = time.perf_counter()
+
             # 1. Rust 加速路径
             if self.rust_map:
                 # [关键修复] Rust 返回 List[List[bytes]]，需转换为 List[List[List[int]]]
                 grid_3d_raw = self.rust_map.get_3d_voxel_grid(
                     xy_margin, z_margin_obs, z_margin_ceil, is_infinite
                 )
+
+                t_rust_calc = time.perf_counter()
+
+                # 数据转换: List[List[bytes]] -> List[List[List[int]]]
                 grid_3d = [[list(col) for col in row] for row in grid_3d_raw]
+
+                t_total = time.perf_counter()
+                self.logger.info(
+                    f"[MapManager] Rust 3D 网格生成完毕. "
+                    f"Rust计算: {(t_rust_calc - t_start)*1000:.2f}ms, "
+                    f"数据转换: {(t_total - t_rust_calc)*1000:.2f}ms"
+                )
 
                 self._3d_grid_caches[key] = grid_3d
                 return grid_3d
@@ -405,6 +440,11 @@ class WorkshopMapManager:
                 is_infinite=is_infinite,
                 logger=self.logger,  # 传递 Logger
                 coord_converter=self,  # 传递自身用于坐标转换
+            )
+
+            t_total = time.perf_counter()
+            self.logger.info(
+                f"[MapManager] Python 3D 网格生成完毕. 总耗时: {(t_total - t_start)*1000:.2f}ms"
             )
 
             self._3d_grid_caches[key] = grid_3d

@@ -1,5 +1,7 @@
+use log::debug;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
+use std::time::Instant;
 
 /// 通用节点坐标 (x, y, z)
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Copy, PartialOrd, Ord)]
@@ -47,7 +49,6 @@ impl FlatGrid {
         let idx = (n.x as usize * self.cols as usize * self.layers as usize)
             + (n.y as usize * self.layers as usize)
             + (n.z as usize);
-        // 添加边界检查防止 panic (虽然 is_valid 应该已经保证了)
         if idx >= self.data.len() {
             return true;
         }
@@ -69,6 +70,8 @@ impl FlatGrid {
 /// 1. 原生 Python List: `List[List[int]]` (2D) 或 `List[List[List[int]]]` (3D)
 /// 2. Rust 生成的 Bytes: `List[bytes]` (2D) 或 `List[List[bytes]]` (3D)
 pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
+    let start_time = Instant::now(); // 开始计时
+
     let rows_list = py_grid.downcast::<PyList>()?;
     let rows = rows_list.len() as i32;
     if rows == 0 {
@@ -84,7 +87,6 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
     let first_row_obj = rows_list.get_item(0)?;
 
     // --- Case A: 2D Grid with Bytes (List[bytes]) ---
-    // Rust MapManager get_2d_projection_grid 返回 Vec<Vec<u8>> 会变成这种格式
     if let Ok(first_bytes) = first_row_obj.downcast::<PyBytes>() {
         let cols = first_bytes.len()? as i32;
         let layers = 1;
@@ -94,9 +96,15 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
         for r in 0..rows {
             let row_obj = rows_list.get_item(r as usize)?;
             let row_bytes = row_obj.downcast::<PyBytes>()?;
-            // 直接内存拷贝，性能极高
             data.extend_from_slice(row_bytes.as_bytes());
         }
+
+        let duration = start_time.elapsed();
+        debug!(
+            "[Rust/Common] 解析Python网格(2D Bytes)耗时: {:.2}ms",
+            duration.as_secs_f64() * 1000.0
+        );
+
         return Ok(FlatGrid {
             rows,
             cols,
@@ -105,7 +113,6 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
         });
     }
 
-    // 此时第一行必然是 List，否则格式不支持
     let first_row_list = first_row_obj.downcast::<PyList>()?;
     let cols = first_row_list.len() as i32;
 
@@ -121,7 +128,6 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
     let first_col_obj = first_row_list.get_item(0)?;
 
     // --- Case B: 3D Grid with Bytes (List[List[bytes]]) ---
-    // Rust MapManager get_3d_voxel_grid 返回 Vec<Vec<Vec<u8>>> 会变成这种格式
     if let Ok(layer_bytes) = first_col_obj.downcast::<PyBytes>() {
         let layers = layer_bytes.len()? as i32;
         let total_size = (rows * cols * layers) as usize;
@@ -136,6 +142,13 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
                 data.extend_from_slice(col_bytes.as_bytes());
             }
         }
+
+        let duration = start_time.elapsed();
+        debug!(
+            "[Rust/Common] 解析Python网格(3D Bytes)耗时: {:.2}ms",
+            duration.as_secs_f64() * 1000.0
+        );
+
         return Ok(FlatGrid {
             rows,
             cols,
@@ -145,7 +158,6 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
     }
 
     // --- Case C: Standard Python List ---
-    // 2D List[List[int]] or 3D List[List[List[int]]]
     let is_3d_list = first_col_obj.is_instance_of::<PyList>();
     let layers = if is_3d_list {
         first_col_obj.downcast::<PyList>()?.len() as i32
@@ -173,6 +185,13 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
             }
         }
     }
+
+    let duration = start_time.elapsed();
+    debug!(
+        "[Rust/Common] 解析Python网格(Native List)耗时: {:.2}ms (Items: {})",
+        duration.as_secs_f64() * 1000.0,
+        total_size
+    );
 
     Ok(FlatGrid {
         rows,

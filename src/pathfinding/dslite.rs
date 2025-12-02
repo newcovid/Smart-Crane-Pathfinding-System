@@ -8,6 +8,7 @@ use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 // 引入日志宏
 use log::{debug, info, warn};
+use std::time::Instant;
 
 /// D* Lite 的优先队列键值 (Keys)。
 ///
@@ -143,7 +144,7 @@ impl RustDLitePlanner {
     /// 更新地图数据（全量）。通常在初始化或地图完全改变时调用。
     pub fn update_grid(&mut self, grid: &Bound<PyAny>) -> PyResult<()> {
         debug!("[Rust D*] 网格全量刷新");
-        let flat_grid = parse_python_grid(grid)?;
+        let flat_grid: FlatGrid = parse_python_grid(grid)?;
         self.grid = flat_grid;
         Ok(())
     }
@@ -198,6 +199,7 @@ impl RustDLitePlanner {
     /// # Arguments
     /// * `changes` - 变化点列表 [(r, c, l, val), ...]
     pub fn update_obstacles(&mut self, changes: Vec<(i32, i32, i32, i32)>) -> PyResult<usize> {
+        let start_time = Instant::now();
         let start_nodes_count = self.nodes_expanded_stat.load(AtomicOrdering::Relaxed);
 
         if self.start_node.is_none() || self.goal_node.is_none() {
@@ -223,7 +225,17 @@ impl RustDLitePlanner {
         self.compute_shortest_path();
 
         let end_nodes = self.nodes_expanded_stat.load(AtomicOrdering::Relaxed);
-        Ok(end_nodes - start_nodes_count)
+        let expanded = end_nodes - start_nodes_count;
+        let duration = start_time.elapsed();
+
+        // 注入 Logger
+        debug!(
+            "[Rust D*] update_obstacles 耗时: {:.2}ms, 扩展节点: {}",
+            duration.as_secs_f64() * 1000.0,
+            expanded
+        );
+
+        Ok(expanded)
     }
 
     /// 获取当前路径（通常每帧调用）。

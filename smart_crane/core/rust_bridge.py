@@ -115,3 +115,21 @@ class RustBackend:
         ):
             return _rust_module.RustPostProcessor
         return None
+
+    # =========================================================================
+    # 组件相关 (Components)
+    # =========================================================================
+
+    @staticmethod
+    def get_safety_guard_class() -> Optional[Any]:
+        """获取 Rust 版安全守卫类。"""
+        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustSafetyGuard"):
+            return _rust_module.RustSafetyGuard
+        return None
+
+    @staticmethod
+    def get_grid_adapter_class() -> Optional[Any]:
+        """获取 Rust 版网格适配器类。"""
+        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustGridAdapter"):
+            return _rust_module.RustGridAdapter
+        return None

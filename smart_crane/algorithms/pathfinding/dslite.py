@@ -56,13 +56,20 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         self.goal_node: Optional[NodeType] = None
         self.last_start_node: Optional[NodeType] = None
 
-        self.max_nodes_expanded = 5000
+        # [修复] 动态计算最大扩展节点数，防止复杂地图下过早熔断
+        # 逻辑与 A* 和 Rust 版本保持一致
+        layers_count = self.layers if self.layers > 0 else 1
+        total_grid_size = self.rows * self.cols * layers_count
+        self.max_nodes_expanded = max(5000, total_grid_size * 5)
+
         # 成本阈值，防止在无解情况下无限搜索
-        self.cost_threshold = 100000.0
+        self.cost_threshold = float(total_grid_size) * 100.0
 
         self.COST_1 = 1.0
         self.COST_2 = SQRT_2
         self.COST_3 = SQRT_3
+
+        self.logger.info(f"D* Lite (Python) 限制: MaxNodes={self.max_nodes_expanded}")
 
         # 加载 Rust 核心
         if RustBackend.is_available() and self.enable_rust:
@@ -353,6 +360,11 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         expansions = 0
         while self.U:
             if expansions > self.max_nodes_expanded:
+                # [Logger 优化] 输出警告以便调试
+                if expansions % 1000 == 0:
+                    self.logger.warning(
+                        f"[Python D*] 扩展节点超过阈值 {self.max_nodes_expanded}，强制中断。"
+                    )
                 return False
 
             # 取出堆顶

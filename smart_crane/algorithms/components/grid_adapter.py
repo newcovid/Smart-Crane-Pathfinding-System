@@ -1,8 +1,10 @@
 import math
 import logging
+import time
 from typing import Tuple, List, Any, Optional, Union, TYPE_CHECKING
 
 from smart_crane.core.config import Settings
+from smart_crane.core.rust_bridge import RustBackend
 from smart_crane.core.constants import (
     SHAPE_CIRCLE,
     MIN_SAFE_HEIGHT_OFFSET,
@@ -23,12 +25,8 @@ Grid3D = List[List[List[int]]]
 class GridAdapter:
     """负责物理坐标系与算法网格坐标系之间的转换适配器。
 
-    该组件支持智能日志嵌套：如果由上层组件（如 TrajectoryPlanner）初始化并传入 Logger，
-    它会自动创建一个子 Logger（如 TrajectoryPlanner.Grid），从而在日志中保留调用链上下文。
-
-    Attributes:
-        map_mgr (WorkshopMapManager): 地图管理器实例引用。
-        logger (logging.Logger): 组件专属的日志记录器。
+    支持 Python 原生实现与 Rust 高性能实现。当 Rust 核心可用时，
+    会将繁重的网格计算和坐标转换逻辑下沉到 Rust 层。
     """
 
     def __init__(
@@ -36,43 +34,22 @@ class GridAdapter:
         map_mgr: "WorkshopMapManager",
         logger: Optional[logging.Logger] = None,
     ):
-        """初始化网格适配器。
-
-        Args:
-            map_mgr (WorkshopMapManager): 地图管理器引用。
-            logger (Optional[logging.Logger]): 父级日志记录器。
-                                             如果传入，将创建名为 {Parent}.GridAdapter 的子记录器。
-                                             如果不传，将创建独立的 "GridAdapter" 记录器。
-        """
+        """初始化网格适配器。"""
         self.map_mgr = map_mgr
 
-        # [日志优化] 实现智能嵌套
         if logger:
-            # 如果传入了父级 Logger (例如 "TrajectoryPlanner")
-            # 使用 getChild 创建子 Logger，名称变为 "TrajectoryPlanner.GridAdapter"
             self.logger = logger.getChild(self.__class__.__name__)
         else:
-            # 否则使用默认的独立名称
             self.logger = logging.getLogger(self.__class__.__name__)
 
-        self.logger.debug("适配器初始化完成。")
+        self.RustAdapter = RustBackend.get_grid_adapter_class()
+        mode = "Rust" if (self.RustAdapter and self.map_mgr.rust_map) else "Python"
+        self.logger.debug(f"适配器初始化完成 (Mode: {mode})。")
 
     def prepare_grids(
         self, settings: Settings
     ) -> Tuple[Union[Grid2D, Grid3D], Grid2D, float]:
-        """根据配置生成用于规划和可视化的网格数据。
-
-        Args:
-            settings (Settings): 全局配置对象，包含吊具尺寸和安全策略。
-
-        Returns:
-            Tuple[Union[Grid2D, Grid3D], Grid2D, float]:
-                - planning_grid: 用于核心算法规划的网格（2D 或 3D）。
-                - visualization_grid: 用于前端展示的 2D 投影网格。
-                - grid_height_m: 网格的物理高度（仅在 3D 模式下有效，2D 模式为 0.0）。
-        """
-        self.logger.info("开始构建规划网格...")
-
+        """根据配置生成用于规划和可视化的网格数据。"""
         # 1. 计算水平膨胀半径
         shape = settings.crane.footprint_shape
         w = settings.crane.footprint_width
@@ -81,14 +58,9 @@ class GridAdapter:
         if shape == SHAPE_CIRCLE:
             radius_m = w / 2.0
         else:
-            # 矩形取对角线的一半作为旋转包络半径
             radius_m = math.hypot(w, l) / 2.0
 
         xy_margin = radius_m / self.map_mgr.resolution_m
-
-        self.logger.debug(
-            f"几何参数: Shape={shape}, R={radius_m:.2f}m, Margin={xy_margin:.2f}px"
-        )
 
         # 2. 计算垂直安全边距
         user_z_margin = settings.crane.z_safety_margin
@@ -125,7 +97,6 @@ class GridAdapter:
                 is_infinite=is_infinite_obs,
             )
 
-            # 可视化网格始终是 2D 投影，方便前端渲染
             grid_vis = self.map_mgr.get_2d_projection_grid(
                 xy_margin=xy_margin, check_z=None, z_margin=z_margin_obs
             )
@@ -138,34 +109,22 @@ class GridAdapter:
         new_grid: Any,
         obstacle_bbox: Tuple[float, float, float, float, float],
     ) -> List[Tuple[int, ...]]:
-        """计算网格增量变化 (Diff)，用于动态规划算法 (如 D* Lite)。
+        """计算网格增量变化 (Diff)。
 
-        Args:
-            settings (Settings): 全局配置。
-            old_grid (Any): 更新前的网格数据。
-            new_grid (Any): 更新后的网格数据。
-            obstacle_bbox (Tuple[float, float, float, float, float]):
-                障碍物的包围盒 (x, y, w, h, z)。
-
-        Returns:
-            List[Tuple[int, ...]]: 变更后的节点列表。
-                - 2D: [(r, c, val), ...]
-                - 3D: [(r, c, l, val), ...]
+        **Rust 加速**:
+        如果可用，将调用 `RustGridAdapter.calculate_incremental_changes`。
         """
-        changes = []
         x, y, w, h, z = obstacle_bbox
 
-        # 计算受影响的网格区域 (ROI)
+        # 1. 计算 ROI 边界 (Common Logic)
         shape = settings.crane.footprint_shape
         c_w = settings.crane.footprint_width
         c_l = settings.crane.footprint_length
-
         if shape == SHAPE_CIRCLE:
             radius_m = c_w / 2.0
         else:
             radius_m = math.hypot(c_w, c_l) / 2.0
 
-        # 加上膨胀缓冲区的受影响范围
         margin_grid = (
             int(math.ceil(radius_m / self.map_mgr.resolution_m)) + GRID_MARGIN_BUFFER
         )
@@ -178,14 +137,55 @@ class GridAdapter:
         c_start = max(0, c_s - margin_grid)
         c_end = min(self.map_mgr.cols, c_e + 1 + margin_grid)
 
-        self.logger.debug(
-            f"计算区域 ROI: Rows[{r_start}:{r_end}], Cols[{c_start}:{c_end}]"
-        )
-
         is_fixed_height = settings.crane.enable_fixed_height_cruise
         is_infinite_obs = settings.crane.obstacle_infinite_height
 
+        l_s = 0
+        l_e = self.map_mgr.layers
+        if not is_fixed_height and not is_infinite_obs:
+            _, _, l_start_idx = self.map_mgr.world_to_grid(0.0, 0.0, 0.0)
+            _, _, l_end_idx = self.map_mgr.world_to_grid(0.0, 0.0, z)
+            l_s = max(0, l_start_idx - margin_grid)
+            l_e = min(self.map_mgr.layers, l_end_idx + 1 + margin_grid)
+
+        # 2. 尝试使用 Rust 加速
+        if self.RustAdapter and self.map_mgr.rust_map:
+            try:
+                roi_bounds = (r_start, r_end, c_start, c_end, l_s, l_e)
+                is_3d = not is_fixed_height
+
+                should_call_rust = True
+                if is_fixed_height and not is_infinite_obs:
+                    cruise_z = settings.crane.safe_travel_z_m
+                    crane_h = settings.crane.footprint_height
+                    z_margin_obs = settings.crane.z_safety_margin + (crane_h / 2.0)
+                    if z <= (cruise_z - z_margin_obs):
+                        should_call_rust = False
+
+                if should_call_rust:
+                    t0 = time.perf_counter()
+                    changes = self.RustAdapter.calculate_incremental_changes(
+                        old_grid,
+                        new_grid,
+                        self.map_mgr.rust_map,
+                        roi_bounds,
+                        is_3d,
+                    )
+                    t1 = time.perf_counter()
+                    self.logger.debug(
+                        f"[GridAdapter] Rust增量Diff计算完毕: {(t1-t0)*1000:.2f}ms"
+                    )
+                    return changes
+                else:
+                    return []
+            except Exception as e:
+                self.logger.error(f"Rust 增量计算失败，回退 Python: {e}")
+
+        # 3. Python 回退实现
+        t0 = time.perf_counter()
+        changes = []
         count = 0
+
         if is_fixed_height:
             # === 2D Diff ===
             should_update = True
@@ -194,10 +194,8 @@ class GridAdapter:
                 crane_h = settings.crane.footprint_height
                 z_margin_obs = settings.crane.z_safety_margin + (crane_h / 2.0)
                 z_threshold = cruise_z - z_margin_obs
-
                 if z <= z_threshold:
                     should_update = False
-                    self.logger.info("障碍物低于巡航层，忽略增量更新。")
 
             if should_update:
                 for r in range(r_start, r_end):
@@ -207,21 +205,11 @@ class GridAdapter:
                         if old_grid is not None:
                             if 0 <= r < len(old_grid) and 0 <= c < len(old_grid[0]):
                                 val_old = old_grid[r][c]
-
                         if val_new != val_old:
                             changes.append((r, c, val_new))
                             count += 1
         else:
             # === 3D Diff ===
-            l_s = 0
-            l_e = self.map_mgr.layers
-
-            if not is_infinite_obs:
-                _, _, l_start_idx = self.map_mgr.world_to_grid(0.0, 0.0, 0.0)
-                _, _, l_end_idx = self.map_mgr.world_to_grid(0.0, 0.0, z)
-                l_s = max(0, l_start_idx - margin_grid)
-                l_e = min(self.map_mgr.layers, l_end_idx + 1 + margin_grid)
-
             for r in range(r_start, r_end):
                 for c in range(c_start, c_end):
                     for l in range(l_s, l_e):
@@ -234,27 +222,36 @@ class GridAdapter:
                                 and 0 <= l < len(old_grid[0][0])
                             ):
                                 val_old = old_grid[r][c][l]
-
                         if val_new != val_old:
                             changes.append((r, c, l, val_new))
                             count += 1
 
-        self.logger.info(f"检测到 {count} 个网格状态变化。")
+        t1 = time.perf_counter()
+        self.logger.info(
+            f"[GridAdapter] Python增量Diff计算完毕: {(t1-t0)*1000:.2f}ms (Changes: {count})"
+        )
         return changes
 
     def get_initial_grid_nodes(
         self, start: Point3D, end: Point3D, settings: Settings
     ) -> Tuple[GridNode, GridNode, float]:
-        """计算起点和终点在算法网格中的坐标，以及巡航高度。
+        """计算起点和终点在算法网格中的坐标。"""
+        # 尝试 Rust
+        if self.RustAdapter and self.map_mgr.rust_map:
+            try:
+                settings_tuple = (
+                    settings.crane.enable_fixed_height_cruise,
+                    settings.crane.safe_travel_z_m,
+                    settings.crane.z_safety_margin,
+                    MIN_SAFE_HEIGHT_OFFSET,
+                )
+                return self.RustAdapter.get_initial_grid_nodes(
+                    start, end, self.map_mgr.rust_map, settings_tuple
+                )
+            except Exception as e:
+                self.logger.error(f"Rust 坐标计算失败，回退 Python: {e}")
 
-        Args:
-            start (Point3D): 起点物理坐标 (x, y, z)。
-            end (Point3D): 终点物理坐标 (x, y, z)。
-            settings (Settings): 配置对象。
-
-        Returns:
-            Tuple[GridNode, GridNode, float]: (起点网格坐标, 终点网格坐标, 巡航物理高度)。
-        """
+        # Python Fallback
         s_x, s_y, s_z = start
         e_x, e_y, e_z = end
 
@@ -263,38 +260,27 @@ class GridAdapter:
 
         if is_fixed_height:
             cruise_z = settings.crane.safe_travel_z_m
-            # 2.5D 模式下，z 坐标在网格中被忽略，仅取前两维
             start_grid = self.map_mgr.world_to_grid(s_x, s_y, 0.0)[:2]
             goal_grid = self.map_mgr.world_to_grid(e_x, e_y, 0.0)[:2]
-            self.logger.debug(f"2.5D 映射: {start} -> {start_grid}")
         else:
-            # 3D 模式：确保起终点不低于最小安全高度
             min_safe = settings.crane.z_safety_margin + MIN_SAFE_HEIGHT_OFFSET
             plan_s_z = max(s_z, min_safe)
             plan_e_z = max(e_z, min_safe)
-
-            if plan_s_z > s_z or plan_e_z > e_z:
-                self.logger.warning(
-                    f"高度自动修正 (低于最小安全高度 {min_safe}m): "
-                    f"Start: {s_z:.1f}->{plan_s_z:.1f}, End: {e_z:.1f}->{plan_e_z:.1f}"
-                )
-
             start_grid = self.map_mgr.world_to_grid(s_x, s_y, plan_s_z)
             goal_grid = self.map_mgr.world_to_grid(e_x, e_y, plan_e_z)
-            self.logger.debug(f"3D 映射: {start} -> {start_grid}")
 
         return start_grid, goal_grid, cruise_z
 
     def grid_to_world_smart(self, node: GridNode, override_z: float) -> Point3D:
-        """智能网格转物理坐标。
+        """智能网格转物理坐标。"""
+        if self.RustAdapter and self.map_mgr.rust_map:
+            try:
+                return self.RustAdapter.grid_to_world_smart(
+                    node, override_z, self.map_mgr.rust_map
+                )
+            except Exception:
+                pass
 
-        Args:
-            node (GridNode): 网格坐标 (2D 或 3D)。
-            override_z (float): 如果是 2D 网格，强制使用的 Z 轴高度。
-
-        Returns:
-            Point3D: 转换后的物理坐标 (x, y, z)。
-        """
         if len(node) == 2:
             wx, wy, _ = self.map_mgr.grid_to_world(node[0], node[1], 0)
             return (wx, wy, override_z)
