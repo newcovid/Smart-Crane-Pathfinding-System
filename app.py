@@ -4,7 +4,7 @@
 #
 # 本模块负责：
 # 1. 初始化 Flask 应用与 SocketIO
-# 2. 配置高保真日志系统（含 WebSocket 实时推送）
+# 2. 配置高保真日志系统（异步架构 + 文件自动存储 + WebSocket 实时推送）
 # 3. 注册 HTTP 路由与 SocketIO 事件
 # 4. 实例化核心业务服务
 # ==============================================================================
@@ -13,14 +13,15 @@ import eventlet
 
 eventlet.monkey_patch()  # 必须在导入其他库之前打补丁，以支持协程
 
-
+import os
+import queue
+import atexit
 import logging
+import logging.handlers
 from typing import Dict, Any, Optional
-
 
 from flask import Flask, render_template, request
 from flask_socketio import SocketIO, emit
-
 
 from smart_crane.core.config import settings
 from smart_crane.core.crane_service import CraneService
@@ -114,6 +115,7 @@ class SocketIOLogHandler(logging.Handler):
             if "socketio" in globals() and socketio is not None:
                 # 获取原始等级名称用于前端配色 (如 "INFO", "ERROR")
                 level_raw: str = record.levelname.strip().upper()
+                # 注意：在异步 Listener 线程中调用 emit 是线程安全的
                 socketio.emit(
                     "server_log",
                     {
@@ -127,60 +129,106 @@ class SocketIOLogHandler(logging.Handler):
 
 
 # ==============================================================================
-# 2. 应用与日志初始化
+# 2. 应用与异步日志初始化
 # ==============================================================================
 
-# =============================
-# 应用与日志系统初始化
-# =============================
 app: Flask = Flask(__name__, template_folder="templates")
 app.config["SECRET_KEY"] = settings.app.secret_key
 
 socketio: SocketIO = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
 
-# 日志系统配置
-log_level_name: str = settings.app.log_level.upper()
-log_level: int = getattr(logging, log_level_name, logging.INFO)
 
-# 清除默认 Handlers，避免重复输出
-logging.getLogger().handlers = []
+def setup_async_logging():
+    """
+    配置异步日志系统：
+    1. Console Handler (控制台)
+    2. SocketIO Handler (网页)
+    3. Rotating File Handler (文件存储，按天轮转)
 
-# 日志格式定义
-LOG_FORMAT_STR: str = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
-DATE_FORMAT_STR: str = "%H:%M:%S"
+    所有 Handler 通过 QueueListener 在独立线程中处理，避免阻塞主业务循环。
+    """
+    # 1. 基础配置
+    log_level_name: str = settings.app.log_level.upper()
+    log_level: int = getattr(logging, log_level_name, logging.INFO)
 
-smart_formatter: SmartLogFormatter = SmartLogFormatter(
-    fmt=LOG_FORMAT_STR, datefmt=DATE_FORMAT_STR
-)
+    # 清除默认 Handlers
+    root = logging.getLogger()
+    root.handlers = []
+    root.setLevel(log_level)
 
-# 控制台日志 Handler
-console_handler: logging.StreamHandler = logging.StreamHandler()
-console_handler.setFormatter(smart_formatter)
-console_handler.setLevel(log_level)
+    # 日志格式
+    LOG_FORMAT_STR: str = "%(asctime)s | %(levelname)s | %(name)s | %(message)s"
+    DATE_FORMAT_STR: str = "%H:%M:%S"
+    smart_formatter = SmartLogFormatter(fmt=LOG_FORMAT_STR, datefmt=DATE_FORMAT_STR)
 
-# WebSocket 日志 Handler
-web_log_handler: SocketIOLogHandler = SocketIOLogHandler()
-web_log_handler.setFormatter(smart_formatter)
-web_log_handler.setLevel(log_level)
+    # 2. 定义实际工作的 Handlers (Workers)
 
-# 绑定到 Root Logger
-root_logger: logging.Logger = logging.getLogger()
-root_logger.setLevel(log_level)
-root_logger.addHandler(console_handler)
-root_logger.addHandler(web_log_handler)
+    # A. 控制台输出
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(smart_formatter)
+    console_handler.setLevel(log_level)
 
-# 主 Logger
+    # B. WebSocket 推送
+    web_handler = SocketIOLogHandler()
+    web_handler.setFormatter(smart_formatter)
+    web_handler.setLevel(log_level)
+
+    # C. 文件存储 (新增: 按天自动轮转)
+    log_dir = "logs"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    # 每天午夜轮转，保留7天备份，utf-8编码防止中文乱码
+    file_handler = logging.handlers.TimedRotatingFileHandler(
+        filename=os.path.join(log_dir, "crane_server.log"),
+        when="midnight",
+        interval=1,
+        backupCount=7,
+        encoding="utf-8",
+    )
+    file_handler.setFormatter(smart_formatter)
+    file_handler.setLevel(log_level)
+
+    # 3. 构建异步队列架构
+    # 创建一个无界队列
+    log_queue = queue.Queue(-1)
+
+    # QueueHandler: 负责将日志快速推入队列 (非阻塞)
+    # 这将是 Root Logger 唯一直接持有的 Handler
+    queue_handler = logging.handlers.QueueHandler(log_queue)
+    root.addHandler(queue_handler)
+
+    # QueueListener: 在后台线程中从队列取出日志并分发给实际的 Handlers (Console, Web, File)
+    listener = logging.handlers.QueueListener(
+        log_queue,
+        console_handler,
+        web_handler,
+        file_handler,
+        respect_handler_level=True,
+    )
+
+    # 启动监听器
+    listener.start()
+
+    # 注册退出时的清理函数
+    atexit.register(listener.stop)
+
+    return root, listener
+
+
+# 执行日志初始化
+root_logger, log_listener = setup_async_logging()
+
+# 主 Logger (用于 app.py 自身)
 logger: logging.Logger = logging.getLogger("APP Server")
-logger.info(f"系统日志服务已就绪 (Level: {log_level_name})")
+logger.info(f"系统日志服务已就绪 (Async Mode, Level: {settings.app.log_level.upper()})")
+logger.info(f"日志文件存储路径: {os.path.abspath('logs/crane_server.log')}")
 
 
 # ==============================================================================
 # 3. 实例化业务服务
 # ==============================================================================
 
-# =============================
-# 业务服务实例化
-# =============================
 crane_service: CraneService = CraneService(settings=settings, logger=root_logger)
 
 
@@ -254,12 +302,9 @@ def handle_request_path(data: Dict[str, Any]) -> None:
         success, msg = crane_service.update_configuration(data["settings"])
         if not success:
             logger.warning(f"规划前配置自动更新失败: {msg}")
-            # 配置失败通常不应阻塞规划（除非参数完全非法），这里选择记录日志并继续尝试规划
         elif msg != "配置未发生变化":
-            # 如果配置确实变了，通知所有客户端更新地图状态
             socketio.emit("update_map_state", crane_service.get_full_state())
 
-    # [优化] 2. 更新任务起终点
     if "start" in data or "end" in data:
         crane_service.update_mission_state(data)
         socketio.emit("sync_mission_coordinates", data, include_self=False)
@@ -269,7 +314,6 @@ def handle_request_path(data: Dict[str, Any]) -> None:
     stats: dict
     msg: str
 
-    # [优化] 3. 执行规划
     path, stats, msg = crane_service.plan_path()
 
     if path:
