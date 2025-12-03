@@ -74,7 +74,12 @@ class TrajectoryPlanner:
         # 网格缓存
         self.active_planning_grid = None
         self.visualization_grid = None
+
+        # 性能统计分离
+        # _pending_grid_prep_ms: 累积网格生成、Diff计算等预处理耗时
+        # _pending_algo_ms: 累积增量更新时的重规划算法耗时
         self._pending_grid_prep_ms = 0.0
+        self._pending_algo_ms = 0.0
 
         # 初次构建
         self.initialize_planner()
@@ -108,12 +113,12 @@ class TrajectoryPlanner:
             )
 
             # 3. 创建后处理管道
-            # [Fix] 显式传递 map_mgr 给工厂，以便注入到 PostProcessors 中
+            # 显式传递 map_mgr 给工厂，以便注入到 PostProcessors 中
             self.post_processors = PlannerFactory.create_post_processors(
                 self.settings, self.map_mgr, self.logger
             )
 
-            # 统计耗时
+            # 统计耗时 (属于 Grid Prep / Initialization)
             elapsed = (time.perf_counter() - t_start) * constants.TIME_MS_MULTIPLIER
             self._pending_grid_prep_ms += elapsed
 
@@ -142,20 +147,20 @@ class TrajectoryPlanner:
             x, y, w, h, z: 障碍物的包围盒参数。
             is_add: True 表示添加，False 表示移除。
         """
-        t_start = time.perf_counter()
+        # 使用更细粒度的计时器
+        t_total_start = time.perf_counter()
+        t_algo_duration = 0.0
 
         with self.grid_lock:
             old_grid = self.active_planning_grid
 
-            # [性能埋点] 1. 网格重生成 (Grid Rebuild)
-            t1 = time.perf_counter()
+            # 1. 网格重生成 (Grid Rebuild) -> 属于 Grid Prep
             plan_grid, vis_grid, _ = self.grid_adapter.prepare_grids(self.settings)
             self.active_planning_grid = plan_grid
             self.visualization_grid = vis_grid
 
-            # 更新核心规划器的网格引用 (这里可能会触发 Rust 侧的网格全量拷贝)
+            # 更新核心规划器的网格引用
             self.core_planner.grid = plan_grid
-            t2 = time.perf_counter()
 
             # 检查是否可以执行增量更新
             supports_incremental = getattr(
@@ -168,37 +173,31 @@ class TrajectoryPlanner:
                 and getattr(self.core_planner, "goal_node", None) is not None
             )
 
-            t_diff = 0.0
-            t_algo = 0.0
-
             if supports_incremental and has_mission:
-                # [性能埋点] 2. 差异计算 (Diff Calculation)
-                t3 = time.perf_counter()
                 changes = self.grid_adapter.calculate_incremental_changes(
                     self.settings, old_grid, plan_grid, (x, y, w, h, z)
                 )
-                t4 = time.perf_counter()
-                t_diff = (t4 - t3) * constants.TIME_MS_MULTIPLIER
 
                 if changes:
                     self.logger.debug(f"触发增量更新: {len(changes)} 处网格变化。")
-                    # [性能埋点] 3. 算法增量更新 (Algo Update / Replanning)
+
+                    # [性能埋点] 3. 算法增量更新 (Algo Update / Replanning) -> 属于 Algo Time
+                    # 这部分是 D* Lite 的核心重规划逻辑，应归类为算法耗时
                     t5 = time.perf_counter()
                     self.core_planner.update_obstacles(changes)
                     t6 = time.perf_counter()
-                    t_algo = (t6 - t5) * constants.TIME_MS_MULTIPLIER
+                    t_algo_duration = (t6 - t5) * constants.TIME_MS_MULTIPLIER
             else:
                 self.logger.debug("跳过增量更新 (算法不支持或无活跃任务)。")
 
-            # 打印详细耗时分析
-            t_grid_rebuild = (t2 - t1) * constants.TIME_MS_MULTIPLIER
-            self.logger.debug(
-                f"[Perf] HandleUpdate: GridRebuild={t_grid_rebuild:.2f}ms, "
-                f"Diff={t_diff:.2f}ms, AlgoUpdate={t_algo:.2f}ms"
-            )
+        # 分离统计：总耗时减去算法耗时 = 纯网格处理耗时
+        total_elapsed = (
+            time.perf_counter() - t_total_start
+        ) * constants.TIME_MS_MULTIPLIER
+        grid_prep_elapsed = max(0.0, total_elapsed - t_algo_duration)
 
-        elapsed = (time.perf_counter() - t_start) * constants.TIME_MS_MULTIPLIER
-        self._pending_grid_prep_ms += elapsed
+        self._pending_grid_prep_ms += grid_prep_elapsed
+        self._pending_algo_ms += t_algo_duration
 
     def plan(
         self, start: Dict[str, float], end: Dict[str, float]
@@ -224,9 +223,11 @@ class TrajectoryPlanner:
         msg_list = []
         t_total_start = time.perf_counter()
 
-        # 继承之前操作（如初始化、障碍物更新）积累的耗时
-        pending_cost = self._pending_grid_prep_ms
+        # 提取并重置累积耗时
+        pending_grid_cost = self._pending_grid_prep_ms
+        pending_algo_cost = self._pending_algo_ms
         self._pending_grid_prep_ms = 0.0
+        self._pending_algo_ms = 0.0
 
         try:
             with self.grid_lock:
@@ -249,9 +250,10 @@ class TrajectoryPlanner:
                 if self.core_planner.grid is not self.active_planning_grid:
                     self.core_planner.grid = self.active_planning_grid
 
+                # 仅累加 grid 相关耗时
                 stats["timings"]["grid_prep_ms"] = (
                     time.perf_counter() - t_grid_start
-                ) * constants.TIME_MS_MULTIPLIER + pending_cost
+                ) * constants.TIME_MS_MULTIPLIER + pending_grid_cost
 
                 stats["grid_meta"] = {
                     "dims": [
@@ -312,9 +314,14 @@ class TrajectoryPlanner:
                 # 计算路径
                 raw_path = self.core_planner.compute_path(final_s_node)
 
-                stats["timings"]["pathfinding_ms"] = (
+                # 将累积的算法耗时 (如 D* Lite 重规划) 加到这里
+                current_algo_time = (
                     time.perf_counter() - t_algo_start
                 ) * constants.TIME_MS_MULTIPLIER
+                stats["timings"]["pathfinding_ms"] = (
+                    current_algo_time + pending_algo_cost
+                )
+
                 stats.update(self.core_planner.get_stats())
 
                 if not raw_path:
@@ -329,9 +336,7 @@ class TrajectoryPlanner:
                     self.grid_adapter.grid_to_world_smart(n, cruise_z) for n in raw_path
                 ]
 
-                # [核心修复] 吸附优化 (Snapping)
-                # 只有将路径的第一个点和最后一个点替换为用户输入的精确坐标，
-                # 贪婪算法（Greedy）才能有机会将整条路径拉直为 "Start -> End"。
+                # 吸附优化 (Snapping)
                 if path_cruise:
                     # 1. 处理起点吸附
                     if has_escaped:
@@ -346,11 +351,10 @@ class TrajectoryPlanner:
                                 path_cruise[0][2],
                             )
                         else:
-                            # [修复] 3D: 完全吸附 XYZ，消除因网格中心化导致的高度差
-                            # 这样 Greedy 算法看到的就是精确的 Start 点，而非网格中心的 5.5m
+                            # 3D: 完全吸附 XYZ
                             path_cruise[0] = exact_start
 
-                    # 2. 处理终点吸附 (终点总是安全的)
+                    # 2. 处理终点吸附
                     if self.settings.crane.enable_fixed_height_cruise:
                         path_cruise[-1] = (
                             exact_end[0],
@@ -358,7 +362,7 @@ class TrajectoryPlanner:
                             path_cruise[-1][2],
                         )
                     else:
-                        # [修复] 3D: 完全吸附 XYZ
+                        # 3D: 完全吸附 XYZ
                         path_cruise[-1] = exact_end
 
                 # Phase 7: Post Processing (后处理 - 仅针对巡航段)
@@ -374,15 +378,14 @@ class TrajectoryPlanner:
                         opt_cruise_path = proc.process(opt_cruise_path, cruise_checker)
                         stats["processors_stats"].append(proc.get_stats())
 
-                # Phase 8: Final Assembly (最终组装 - 逻辑修复)
-                # 逻辑：Entry Maneuver -> Cruise Path -> Exit Maneuver
+                # Phase 8: Final Assembly (最终组装)
                 final_path = []
                 is_fixed_h = self.settings.crane.enable_fixed_height_cruise
 
                 if is_fixed_h:
                     # === 1. Entry Phase (起步阶段) ===
                     if has_escaped:
-                        # [修复] 脱困逻辑：先平移出危险区，再提升
+                        # 脱困逻辑：先平移出危险区，再提升
                         # Path: Start(Z_low) -> Escape(Z_low) -> Escape(Z_high) -> Cruise...
 
                         # 1.1 加入原始起点
@@ -414,15 +417,7 @@ class TrajectoryPlanner:
 
                         # 2.1 加入原始起点
                         final_path.append(exact_start)
-
-                        # 2.2 加入起飞点 (Start High)
-                        start_pt_cruise = (
-                            exact_start[0],
-                            exact_start[1],
-                            cruise_z,
-                        )
-
-                        # 只有当高度差显著时才添加
+                        start_pt_cruise = (exact_start[0], exact_start[1], cruise_z)
                         if (
                             abs(exact_start[2] - cruise_z)
                             > constants.PATH_MIN_HEIGHT_DIFF
@@ -482,7 +477,7 @@ class TrajectoryPlanner:
                     ):
                         final_path.append(exact_end)
 
-                # 最终清理：移除极其微小的抖动点，并保留指定小数位
+                # 最终清理
                 final_path = self._deduplicate_path(
                     final_path, tolerance=constants.DEFAULT_DEDUP_TOLERANCE
                 )
@@ -494,9 +489,14 @@ class TrajectoryPlanner:
                 stats["timings"]["splicing_ms"] = (
                     time.perf_counter() - t_splice_start
                 ) * constants.TIME_MS_MULTIPLIER
+
+                # 总耗时计算：加上之前的所有累积耗时
                 stats["timings"]["total_ms"] = (
-                    time.perf_counter() - t_total_start
-                ) * constants.TIME_MS_MULTIPLIER + pending_cost
+                    (time.perf_counter() - t_total_start) * constants.TIME_MS_MULTIPLIER
+                    + pending_grid_cost
+                    + pending_algo_cost
+                )
+
                 stats["path_meta"]["final_nodes"] = len(final_path)
 
                 msg = f"成功 ({'; '.join(msg_list)})" if msg_list else "成功"

@@ -84,7 +84,7 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         self.COST_3 = SQRT_3
 
         self.logger.info(
-            f"D* Lite（Python）限制：最大扩展节点 = {self.max_nodes_expanded}"
+            f"D* Lite（Python）限制：最大扩展节点 = {self.max_nodes_expanded}, W = {self.heuristic_weight}"
         )
 
         # 加载 Rust 核心
@@ -127,15 +127,7 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         return True
 
     def initialize(self, start: NodeType, goal: NodeType) -> bool:
-        """初始化 D* Lite 搜索状态。
-
-        Args:
-            start: 起点。
-            goal: 终点。
-
-        Returns:
-            bool: 是否成功。
-        """
+        """初始化 D* Lite 搜索状态。"""
         self.stats["nodes_expanded"] = self.pending_expansions
         self.pending_expansions = 0
         self.stats["replanning_count"] = 0
@@ -174,28 +166,12 @@ class DLitePlanner(PathPlannerBase[NodeType]):
                 self.start_node = start
             return True
 
-        # 全量重置
-        self.start_node = start
-        self.goal_node = goal
-        self.last_start_node = start
-        self.km = 0.0
-        self.U = []
-        self.open_keys.clear()
-        self.g.clear()
-        self.rhs.clear()
-
-        # D* 是反向搜索，rhs(goal) = 0
-        self.rhs[goal] = 0.0
-        self._insert_to_open(goal, self._calculate_key(goal))
-
+        # 新任务：全量重置
+        self._full_reset(start, goal)
         return self._compute_shortest_path()
 
     def update_obstacles(self, changes: List[Tuple[int, ...]]):
-        """处理动态障碍物更新。
-
-        Args:
-            changes: 变化列表。
-        """
+        """处理动态障碍物更新。"""
         if not changes:
             return
 
@@ -284,9 +260,16 @@ class DLitePlanner(PathPlannerBase[NodeType]):
 
         self.start_node = current_pos
 
-        # 确保路径一致性
+        # 严格的失败回退机制 (Reset Fallback)
+        # 如果增量修复失败（通常因为扩展节点数超限未收敛），必须全量重算
+        # 否则会带着不一致的 G 值进入回溯，导致死循环或非法路径
         if not self._compute_shortest_path():
-            self.logger.debug("路径计算未完全收敛或无解。")
+            self.logger.warning("D* Lite 增量修复未收敛，执行全量重置 (Full Reset)...")
+            self._full_reset(current_pos, self.goal_node)
+
+            if not self._compute_shortest_path():
+                self.logger.error("D* Lite 全量重算仍无解！")
+                return None
 
         if self.g.get(current_pos, INF) == INF:
             self.logger.info("当前点 g 值无穷大，无法到达目标。")
@@ -304,24 +287,46 @@ class DLitePlanner(PathPlannerBase[NodeType]):
             for neighbor, move_cost in self._get_neighbors(curr):
                 if self.is_obstacle(neighbor):
                     continue
+
                 # c = cost(curr, next) + g(next)
                 c = move_cost + self.g.get(neighbor, INF)
+
                 if c < min_cost - EPSILON:
                     min_cost = c
                     best_next = neighbor
 
             if best_next:
                 if best_next in path:
-                    self.logger.warning("检测到路径环路，停止回溯。")
+                    self.logger.warning(f"检测到路径环路，停止回溯。Node: {best_next}")
                     return None
                 path.append(best_next)
                 curr = best_next
             else:
+                self.logger.debug(
+                    f"回溯中断：无更好邻居 (Curr: {curr}, MinCost: {min_cost})"
+                )
                 break
 
         return path
 
     # --- D* Lite 内部辅助函数 ---
+
+    def _full_reset(self, start: NodeType, goal: NodeType):
+        """[新增] 全量重置搜索状态（相当于全新的 A*）。"""
+        self.start_node = start
+        self.goal_node = goal
+        self.last_start_node = start
+        self.km = 0.0
+
+        # 清空所有状态
+        self.U = []
+        self.open_keys.clear()
+        self.g.clear()
+        self.rhs.clear()
+
+        # D* 是反向搜索，rhs(goal) = 0
+        self.rhs[goal] = 0.0
+        self._insert_to_open(goal, self._calculate_key(goal))
 
     def _insert_to_open(self, u, key):
         """插入或更新优先队列。"""
@@ -329,10 +334,7 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         heapq.heappush(self.U, (key, u))
 
     def _calculate_key(self, u):
-        """计算节点的 Key = [k1, k2]。
-        k1 = min(g, rhs) + h + km
-        k2 = min(g, rhs)
-        """
+        """计算节点的 Key = [k1, k2]。"""
         g_val = self.g.get(u, INF)
         rhs_val = self.rhs.get(u, INF)
         min_val = min(g_val, rhs_val)
@@ -376,10 +378,10 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         expansions = 0
         while self.U:
             if expansions > self.max_nodes_expanded:
-                # 超过限定的最大扩展节点数，定期记录警告并中断以防止长时间阻塞
+                # 超过限定的最大扩展节点数，中止搜索以防阻塞
                 if expansions % self.max_nodes_expanded == 0:
                     self.logger.warning(
-                        f"扩展节点超出限制（{self.max_nodes_expanded}），中止搜索以防阻塞。已扩展 {expansions} 个节点。"
+                        f"扩展节点超出限制（{self.max_nodes_expanded}），增量搜索中止。"
                     )
                 return False
 
@@ -454,19 +456,25 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         """内联启发式函数。"""
         if not a or not b:
             return 0.0
+        val = 0.0
         if len(a) == 3:
             dx, dy, dz = abs(a[0] - b[0]), abs(a[1] - b[1]), abs(a[2] - b[2])
             if self.use_octile_3d:
                 delta = sorted([dx, dy, dz])
-                return (
+                val = (
                     delta[0] * self.COST_3
                     + (delta[1] - delta[0]) * self.COST_2
                     + (delta[2] - delta[1]) * self.COST_1
                 )
-            return math.sqrt(dx * dx + dy * dy + dz * dz)
+            else:
+                val = math.sqrt(dx * dx + dy * dy + dz * dz)
         else:
             dx, dy = abs(a[0] - b[0]), abs(a[1] - b[1])
-            return (dx + dy) + (self.COST_2 - 2) * min(dx, dy)
+            val = (dx + dy) + (self.COST_2 - 2) * min(dx, dy)
+
+        # [关键修复] 应用权重 (heuristic_weight)
+        # 如果不乘权重，H 值偏小，会导致节点优先级计算错误，在复杂地图下引发大量无效扩展甚至死循环
+        return val * self.heuristic_weight
 
     def _get_neighbors(self, node):
         """获取邻居节点。"""
