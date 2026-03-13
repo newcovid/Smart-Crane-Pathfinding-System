@@ -126,7 +126,3 @@
 * [ ] **硬件接入**: 开发 PLC 适配层 (Modbus/OPC UA)，接入真实的西门子/三菱 PLC 控制器。
 
 ---
-
-## 8. 许可证 (License)
-
-[MIT License](LICENSE)
