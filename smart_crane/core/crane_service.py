@@ -12,6 +12,7 @@ except ImportError:
 
 from smart_crane.core.config import Settings
 from smart_crane.core.map_manager import WorkshopMapManager
+from smart_crane.core.rust_bridge import RustBackend
 from smart_crane.algorithms.trajectory_planner import TrajectoryPlanner
 from smart_crane.core.constants import (
     MSG_CONFIG_UPDATE,
@@ -62,6 +63,12 @@ class CraneService:
             self.logger = logging.getLogger(self.__class__.__name__)
 
         self.settings = settings
+
+        # 把配置里的 ENABLE_RUST_CORE 落到全局后端开关上。
+        # 必须在构造 MapManager / Planner 之前执行——它们在初始化时就会
+        # 询问 RustBackend.is_available()。此前这个开关只传给了规划器，
+        # 地图生成、C-Space 膨胀、脱困、后处理都绕过了它。
+        RustBackend.set_enabled(settings.planner.enable_rust_core)
 
         # 初始化任务状态（使用常量避免魔法数字）
         self.mission_state = {
@@ -171,15 +178,24 @@ class CraneService:
                 self.settings.map.resolution_m,
             )
 
-            # 2. 更新 Settings 对象 (Pydantic 会处理类型转换)
+            # 2. 更新 Settings 对象。
+            #    分节已开启 validate_assignment，非法值会抛 ValidationError，
+            #    由本方法末尾的 except 兜住并作为失败结果返回给客户端。
             old_dump = self.settings.model_dump()
-            self.settings.update_from_dict(new_settings_dict)
+            unknown_keys = self.settings.update_from_dict(new_settings_dict)
             new_dump = self.settings.model_dump()
+
+            if unknown_keys:
+                # 不静默丢弃：前端拼错键名必须能看到，否则会以为设置生效了。
+                return False, f"存在未知配置项: {', '.join(sorted(unknown_keys))}"
 
             if old_dump == new_dump:
                 return True, MSG_CONFIG_NO_CHANGE
 
             self.logger.info("配置已更新")
+
+            # 配置可能改动了 ENABLE_RUST_CORE，同步到全局后端开关
+            RustBackend.set_enabled(self.settings.planner.enable_rust_core)
 
             # 3. 检查是否需要重建地图
             new_map_dims = (
@@ -286,17 +302,28 @@ class CraneService:
         Returns:
             Tuple[bool, str]: (是否成功, 消息)。
         """
-        res = self.map_mgr.find_obstacle_near(data["x"], data["y"])
-        if not res:
-            return False, MSG_OBS_NOT_FOUND
+        if "x" not in data or "y" not in data:
+            # 这里原本直接 data["x"]，且整个方法没有 try/except。
+            # 缺字段会抛 KeyError 被 Flask-SocketIO 吞掉，客户端既收不到
+            # operation_success 也收不到 operation_failed，界面就那么卡住。
+            return False, "请求缺少必需字段 x / y"
 
-        oid, otype = res
-        obs = self.map_mgr.static_obstacles.get(
-            oid
-        ) or self.map_mgr.dynamic_obstacles.get(oid)
+        # 查找与读取必须在同一把锁内完成，否则是典型的 TOCTOU：
+        # find_obstacle_near 自己加锁返回 id 后释放锁，此刻另一个事件
+        # 可能已经把该障碍物删掉了。
+        with self.map_mgr.lock:
+            res = self.map_mgr.find_obstacle_near(data["x"], data["y"])
+            if not res:
+                return False, MSG_OBS_NOT_FOUND
 
-        if not obs:
-            return False, "数据一致性错误"
+            oid, otype = res
+            obs = self.map_mgr.static_obstacles.get(
+                oid
+            ) or self.map_mgr.dynamic_obstacles.get(oid)
+
+            if not obs:
+                return False, "数据一致性错误"
+            obs = dict(obs)  # 出锁前拷贝一份，后续读取不再依赖共享状态
 
         self.logger.info(f"正在移除 {otype} 障碍物: {oid}")
 

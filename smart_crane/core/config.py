@@ -1,6 +1,6 @@
-import os
 import logging
-from typing import Dict, Any
+import secrets
+from typing import Any, Dict, List
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,7 +23,30 @@ from smart_crane.core.constants import (
 )
 
 
-class MapSettings(BaseSettings):
+SECTION_CONFIG = SettingsConfigDict(
+    env_file=".env",
+    env_file_encoding="utf-8",
+    extra="ignore",
+    # 必须开启：`update_configuration` 走的是 setattr，而 Pydantic v2 默认
+    # 【不校验赋值】。不开的话，Socket.IO 端点传来的 "MAP_WIDTH_M": "abc"
+    # 会被静默写入，直到后续 `width_m / resolution_m` 才抛 TypeError，
+    # 错误现场离根因很远。开启后非法值在赋值点即抛 ValidationError。
+    validate_assignment=True,
+)
+
+
+class SectionSettings(BaseSettings):
+    """各配置分节的公共基类。
+
+    分节是通过 `Field(default_factory=...)` 独立实例化的，不会继承外层
+    `Settings` 的 model_config。因此 env_file 与 validate_assignment
+    必须在这里统一声明，否则 `.env` 只对外层生效、赋值校验全线缺失。
+    """
+
+    model_config = SECTION_CONFIG
+
+
+class MapSettings(SectionSettings):
     """地图物理属性配置模型。
 
     Attributes:
@@ -39,7 +62,7 @@ class MapSettings(BaseSettings):
     resolution_m: float = Field(DEFAULT_RESOLUTION, alias="MAP_RESOLUTION_M")
 
 
-class CraneSettings(BaseSettings):
+class CraneSettings(SectionSettings):
     """吊具参数与安全策略配置模型。
 
     Attributes:
@@ -75,7 +98,7 @@ class CraneSettings(BaseSettings):
     )
 
 
-class PlannerSettings(BaseSettings):
+class PlannerSettings(SectionSettings):
     """路径规划算法引擎配置模型。
 
     Attributes:
@@ -91,7 +114,7 @@ class PlannerSettings(BaseSettings):
     heuristic_weight: float = Field(DEFAULT_HEURISTIC_WEIGHT, alias="HEURISTIC_WEIGHT")
 
 
-class PostProcessSettings(BaseSettings):
+class PostProcessSettings(SectionSettings):
     """后处理管道配置模型。
 
     Attributes:
@@ -109,16 +132,19 @@ class PostProcessSettings(BaseSettings):
     bezier_segments: int = Field(DEFAULT_BEZIER_SEGMENTS, alias="BEZIER_SEGMENTS")
 
 
-class AppSettings(BaseSettings):
+class AppSettings(SectionSettings):
     """应用层通用配置模型。
 
     Attributes:
-        secret_key (str): Flask 应用密钥。
+        secret_key (str): Flask 应用密钥。默认每次启动随机生成。
         log_level (str): 日志等级。
     """
 
-    secret_key: str = Field("dev_secret_key_123", alias="SECRET_KEY")
-    log_level: str = Field("DEBUG", alias="LOG_LEVEL")
+    # 默认值必须是随机的：写死的密钥一旦进了公开仓库就等于没有密钥，
+    # 任何人都能伪造会话 cookie。随机默认值的代价是重启后会话失效，
+    # 这在部署时通过设置 SECRET_KEY 环境变量解决（见 README 的部署一节）。
+    secret_key: str = Field(default_factory=lambda: secrets.token_hex(32), alias="SECRET_KEY")
+    log_level: str = Field("INFO", alias="LOG_LEVEL")
 
 
 class Settings(BaseSettings):
@@ -160,13 +186,18 @@ class Settings(BaseSettings):
                     flat[key] = value
         return flat
 
-    def update_from_dict(self, data: Dict[str, Any]) -> None:
+    def update_from_dict(self, data: Dict[str, Any]) -> List[str]:
         """从扁平字典更新配置。
 
-        该方法会自动识别键名所属的子配置项并进行类型转换更新。
+        自动识别键名所属的子配置项。因分节已开启 ``validate_assignment``，
+        非法值会在赋值处抛出 ``pydantic.ValidationError``，由调用方处理。
 
         Args:
             data (Dict[str, Any]): 包含更新值的扁平字典。
+
+        Returns:
+            List[str]: 未能识别的键名。调用方应当把它回传给客户端——
+                静默丢弃会让前端拼错一个键名却依然收到"配置已更新"。
         """
         logger = logging.getLogger("Settings")
         updated_keys = []
@@ -178,6 +209,8 @@ class Settings(BaseSettings):
                 for field_name, field_info in section.model_fields.items():
                     alias = field_info.alias or field_name.upper()
                     alias_map[alias] = (section, field_name)
+
+        unknown_keys = [k for k in data if k not in alias_map]
 
         for k, v in data.items():
             if k in alias_map:
@@ -194,6 +227,11 @@ class Settings(BaseSettings):
             )
         else:
             logger.debug("尝试更新配置，但没有检测到实际值变更。")
+
+        if unknown_keys:
+            logger.warning(f"忽略了 {len(unknown_keys)} 个未知配置项: {unknown_keys}")
+
+        return unknown_keys
 
 
 # 全局单例实例

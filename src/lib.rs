@@ -6,12 +6,12 @@ mod map;
 mod pathfinding;
 mod post_processing;
 
-use components::grid_adapter::RustGridAdapter; // 新增
-use components::safety_guard::RustSafetyGuard;
-use map::RustMapManager;
-use pathfinding::astar::RustAStarPlanner;
-use pathfinding::dslite::RustDLitePlanner;
-use post_processing::RustPostProcessor;
+use crate::components::grid_adapter::RustGridAdapter;
+use crate::components::safety_guard::RustSafetyGuard;
+use crate::map::RustMapManager;
+use crate::pathfinding::astar::RustAStarPlanner;
+use crate::pathfinding::dslite::RustDLitePlanner;
+use crate::post_processing::RustPostProcessor;
 
 /// Rust 核心寻路模块入口
 #[pymodule]
@@ -25,6 +25,6 @@ fn smart_crane_core(m: &Bound<PyModule>) -> PyResult<()> {
     m.add_class::<RustPostProcessor>()?;
     // Components
     m.add_class::<RustSafetyGuard>()?;
-    m.add_class::<RustGridAdapter>()?; // 注册
+    m.add_class::<RustGridAdapter>()?;
     Ok(())
 }

@@ -8,7 +8,6 @@ Smart Crane 智能起重机控制系统
 Modules:
     core: 核心架构（配置、地图、Rust 桥接、业务服务）。
     algorithms: 路径规划算法（A*、D* Lite、后处理）。
-    api: Web 接口与 SocketIO 通信。
 
 Copyright (c) 2023-2025 Smart Crane Team.
 """

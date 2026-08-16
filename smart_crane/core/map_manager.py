@@ -306,7 +306,7 @@ class WorkshopMapManager:
         c_s, c_e = max(0, c_s), min(self.cols - 1, c_e)
         for r in range(r_s, r_e + 1):
             for c in range(c_s, c_e + 1):
-                grid[r][c] = 1
+                grid[r][c] = GRID_OCCUPIED
 
     def get_2d_projection_grid(
         self, xy_margin: float, check_z: Optional[float] = None, z_margin: float = 0.0

@@ -73,12 +73,27 @@ impl GridFactory {
         xy_margin: f32,
     ) -> Vec<Vec<u8>> {
         let mut grid = vec![vec![0u8; cols as usize]; rows as usize];
-        let xy_margin_sq = xy_margin.powi(2);
-        let margin_grid_cells = (xy_margin / resolution_m).ceil() as i32 + 1;
+
+        // `xy_margin` 的单位是【网格数】，与 Python 侧 grid_adapter 的
+        // `xy_margin = radius_m / resolution_m` 及 grid_factory.py 的文档一致。
+        // 此处的距离计算在物理米下进行，所以先换算成米；再补 0.5 格的离散补偿，
+        // 与 Python 的 `dist_map <= xy_margin + 0.5` 和下面 EDT 分支的判据对齐。
+        // （旧代码把 xy_margin 当米用，分辨率恰为 1.0 m 时两者数值相同，
+        //   所以一直没暴露；分辨率 0.5 m 时膨胀量翻倍，2.0 m 时只剩一半——
+        //   后者是往不安全的方向错。）
+        let margin_m = (xy_margin + 0.5) * resolution_m;
+        let xy_margin_sq = margin_m.powi(2);
+        let margin_grid_cells = xy_margin.ceil() as i32 + 1;
 
         let threshold = xy_margin - 0.5;
         if threshold >= 0.0 {
-            let border_cells = (threshold.floor() as i32).min(cols).min(rows);
+            // 上界必须是 rows-1 / cols-1：循环同时索引 grid[r] 与 grid[rows-1-r]，
+            // 一旦 border_cells 取到 rows，(rows-1-r) 会算出 -1，
+            // 转成 usize 后回绕成巨大下标并 panic。
+            let border_cells = (threshold.floor() as i32)
+                .min(cols - 1)
+                .min(rows - 1)
+                .max(0);
             for r in 0..=border_cells {
                 for c in 0..cols {
                     grid[r as usize][c as usize] = 1;
@@ -149,7 +164,9 @@ impl GridFactory {
         }
 
         let dist_sq_map = Self::compute_edt_squared(&base_grid, rows_usize, cols_usize);
-        let margin_grid = xy_margin / resolution_m;
+        // EDT 输出的距离单位就是【网格数】，而入参 xy_margin 也已经是网格数，
+        // 不能再除以 resolution_m（旧代码多除了一次）。
+        let margin_grid = xy_margin;
         let threshold_sq = (margin_grid + 0.5).powi(2);
         let mut final_grid = vec![vec![0u8; cols_usize]; rows_usize];
 
@@ -239,12 +256,19 @@ impl GridFactory {
         map_height_m: f32,
     ) -> Vec<Vec<f32>> {
         let mut height_map = vec![vec![0.0f32; cols as usize]; rows as usize];
-        let xy_margin_sq = xy_margin.powi(2);
-        let margin_grid_cells = (xy_margin / resolution_m).ceil() as i32 + 1;
+
+        // 单位约定同 create_2d_via_painting：xy_margin 为【网格数】。
+        let margin_m = (xy_margin + 0.5) * resolution_m;
+        let xy_margin_sq = margin_m.powi(2);
+        let margin_grid_cells = xy_margin.ceil() as i32 + 1;
 
         let threshold = xy_margin - 0.5;
         if threshold >= 0.0 {
-            let border_cells = (threshold.floor() as i32).min(cols).min(rows);
+            // 上界取 rows-1 / cols-1，避免 (rows - 1 - r) 出现 -1 后转 usize 回绕。
+            let border_cells = (threshold.floor() as i32)
+                .min(cols - 1)
+                .min(rows - 1)
+                .max(0);
             let infinite_h = map_height_m + 10.0;
             for r in 0..=border_cells {
                 for c in 0..cols {

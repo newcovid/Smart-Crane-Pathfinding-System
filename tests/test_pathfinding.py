@@ -23,6 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from smart_crane.algorithms.pathfinding.astar import AStarPlanner
 from smart_crane.algorithms.pathfinding.dslite import DLitePlanner
 from smart_crane.core.constants import GRID_FREE, GRID_OCCUPIED
+from smart_crane.core.rust_bridge import RustBackend
 
 SEED = 20260816
 
@@ -190,6 +191,116 @@ class TestDStarLiteIncremental(unittest.TestCase):
         self.assertLess(
             median, astar_ms / 2, f"增量 {median:.1f}ms 未显著快于全量 {astar_ms:.1f}ms"
         )
+
+
+@unittest.skipUnless(
+    RustBackend.is_extension_loaded(),
+    "未构建 Rust 扩展（maturin develop --release），跳过双引擎等价性测试",
+)
+class TestEngineEquivalence(unittest.TestCase):
+    """Python 原生实现与 Rust 加速实现必须给出等价结果。
+
+    这是双引擎项目最该有的测试。两套实现共用同一份接口契约，
+    任何一侧的单位换算、哨兵语义、浮点判据、维度判断出现偏差，
+    都会在这里暴露成"同一张图、同一份配置、两个不同的答案"。
+
+    注意断言的是【代价等价】而非【逐点相同】：Rust 用 f32、Python 用 f64，
+    代价相同的多条路径在 tie-break 时可能选择不同分支。
+    """
+
+    SIZES = (40, 80)
+
+    def setUp(self):
+        logging.disable(logging.CRITICAL)
+        self.addCleanup(logging.disable, logging.NOTSET)
+
+    @staticmethod
+    def _path_cost(path):
+        cost = 0.0
+        for (r0, c0), (r1, c1) in zip(path, path[1:]):
+            dr, dc = abs(r1 - r0), abs(c1 - c0)
+            cost += 1.0 if (dr == 0 or dc == 0) else 2.0**0.5
+        return cost
+
+    def _plan(self, cls, grid, size, **kw):
+        planner = cls(
+            grid=[row[:] for row in grid],
+            width_m=float(size),
+            length_m=float(size),
+            **kw,
+        )
+        start, goal = (0, 0), (size - 1, size - 1)
+        planner.initialize(start, goal)
+        return planner.compute_path(start)
+
+    def test_astar_cost_matches_across_engines(self):
+        for size in self.SIZES:
+            with self.subTest(size=size):
+                grid = build_grid(size)
+                with RustBackend.disabled():
+                    py_path = self._plan(AStarPlanner, grid, size, enable_rust=False)
+                rs_path = self._plan(AStarPlanner, grid, size, enable_rust=True)
+
+                self.assertTrue(py_path, "Python A* 未找到路径")
+                self.assertTrue(rs_path, "Rust A* 未找到路径")
+                self.assertAlmostEqual(
+                    self._path_cost(py_path),
+                    self._path_cost(rs_path),
+                    places=3,
+                    msg=f"{size}x{size} 上两引擎 A* 代价不一致",
+                )
+
+    def test_dstar_cost_matches_across_engines(self):
+        for size in self.SIZES:
+            with self.subTest(size=size):
+                grid = build_grid(size)
+                with RustBackend.disabled():
+                    py_path = self._plan(DLitePlanner, grid, size, enable_rust=False)
+                rs_path = self._plan(DLitePlanner, grid, size, enable_rust=True)
+
+                self.assertTrue(py_path, "Python D* Lite 未找到路径")
+                self.assertTrue(rs_path, "Rust D* Lite 未找到路径")
+                self.assertAlmostEqual(
+                    self._path_cost(py_path),
+                    self._path_cost(rs_path),
+                    places=3,
+                    msg=f"{size}x{size} 上两引擎 D* Lite 代价不一致",
+                )
+
+    def test_inflation_matches_across_resolutions(self):
+        """C-Space 膨胀在非 1.0 分辨率下也必须一致。
+
+        回归用例：Rust 侧曾把 `xy_margin`（单位为网格数）当作米使用，
+        分辨率恰为 1.0 m 时两者数值相同因而一直没暴露；
+        0.5 m 时膨胀量翻倍，2.0 m 时只剩一半——后者是往不安全方向错。
+        """
+        from smart_crane.core.map_manager import WorkshopMapManager
+
+        for res in (0.5, 1.0, 2.0):
+            with self.subTest(resolution=res):
+                # xy_margin 的单位是【网格数】，所以固定 1.0 m 的物理半径，
+                # 换算成不同分辨率下的格数——两引擎膨胀出的占据格数应当一致。
+                margin_cells = 1.0 / res
+
+                def build():
+                    mm = WorkshopMapManager(
+                        width_m=20.0, length_m=20.0, height_m=10.0, resolution_m=res
+                    )
+                    mm.add_static_obstacle("o1", x=8.0, y=8.0, w=4.0, h=4.0, z=5.0)
+                    return mm.get_2d_projection_grid(xy_margin=margin_cells)
+
+                with RustBackend.disabled():
+                    py_grid = build()
+                rs_grid = build()
+
+                py_occ = sum(sum(row) for row in py_grid)
+                rs_occ = sum(sum(row) for row in rs_grid)
+                self.assertEqual(
+                    py_occ,
+                    rs_occ,
+                    f"分辨率 {res} m（膨胀 {margin_cells} 格）下两引擎的占据格数不同 "
+                    f"(Python={py_occ}, Rust={rs_occ})",
+                )
 
 
 if __name__ == "__main__":

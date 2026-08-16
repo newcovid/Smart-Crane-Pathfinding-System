@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from smart_crane.algorithms.pathfinding.astar import AStarPlanner  # noqa: E402
 from smart_crane.algorithms.pathfinding.dslite import DLitePlanner  # noqa: E402
 from smart_crane.core.constants import GRID_FREE, GRID_OCCUPIED  # noqa: E402
-from smart_crane.core.rust_bridge import HAS_RUST_CORE  # noqa: E402
+from smart_crane.core.rust_bridge import HAS_RUST_CORE, RustBackend  # noqa: E402
 
 Grid = List[List[int]]
 SEED = 20260816
@@ -105,8 +105,13 @@ def bench_dstar_incremental(size: int, repeat: int, updates: int = 20) -> Option
             grid[r][c] = new_state
             # 注意 update_obstacles 的契约：2D 传 (x, y, 新状态)，3D 传 (x, y, z, 新状态)。
             # 内部用 change[:-1] 取坐标，少传一位会被解析成非法节点并静默跳过。
-            planner.update_obstacles([(r, c, new_state)])
-            ms, _ = _time_ms(lambda: planner.compute_path(start))
+            # update_obstacles 与 compute_path 一起计时：一次环境变化的
+            # 真实成本是"通知规划器 + 取出新路径"之和，只计后者会偏乐观约 8%。
+            def _replan():
+                planner.update_obstacles([(r, c, new_state)])
+                return planner.compute_path(start)
+
+            ms, _ = _time_ms(_replan)
             samples.append(ms)
 
     return statistics.median(samples) if samples else None
@@ -116,34 +121,67 @@ def fmt(value: Optional[float]) -> str:
     return "n/a" if value is None else f"{value:,.1f}"
 
 
+def _run_table(sizes: Sequence[int], repeat: int, updates: int, label: str) -> None:
+    print(f"\n=== {label} ===")
+    header = (
+        f"{'网格':>12} | {'A* 全局 (ms)':>14} | "
+        f"{'D* Lite 增量 (ms)':>18} | {'加速比':>7} | {'路径步数':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+    for size in sizes:
+        astar_ms, steps = bench_astar(size, repeat)
+        dstar_ms = bench_dstar_incremental(size, repeat, updates)
+        ratio = (
+            f"{astar_ms / dstar_ms:.0f}x" if (astar_ms and dstar_ms) else "n/a"
+        )
+        print(
+            f"{size}x{size:<7} | {fmt(astar_ms):>14} | "
+            f"{fmt(dstar_ms):>18} | {ratio:>7} | {steps:>8}"
+        )
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", type=int, nargs="+", default=[100, 200, 400])
     parser.add_argument("--repeat", type=int, default=3, help="每项取中位数的重复次数")
     parser.add_argument("--updates", type=int, default=20, help="D* Lite 增量更新次数")
+    parser.add_argument(
+        "--engine",
+        choices=("auto", "python", "rust", "both"),
+        default="auto",
+        help=(
+            "auto=按扩展可用性自动选择；python=强制纯 Python；"
+            "rust=强制 Rust（缺扩展则报错）；both=同一次运行内两者都跑，输出对照表"
+        ),
+    )
     args = parser.parse_args(argv)
 
-    engine = "Rust 加速" if HAS_RUST_CORE else "Python 原生"
-    print(f"引擎: {engine}    (HAS_RUST_CORE={HAS_RUST_CORE})")
     print(f"障碍占比 {OBSTACLE_RATIO:.0%}，{BLOCK_SIZE}x{BLOCK_SIZE} 矩形块，种子 {SEED}")
-    print(f"重复 {args.repeat} 次取中位数\n")
+    print(f"重复 {args.repeat} 次取中位数，每次 {args.updates} 轮增量更新")
+    print(f"Rust 扩展: {'已加载' if HAS_RUST_CORE else '未检测到'}")
 
-    header = f"{'网格':>12} | {'A* 全局 (ms)':>14} | {'D* Lite 增量 (ms)':>18} | {'路径步数':>8}"
-    print(header)
-    print("-" * len(header))
+    if args.engine in ("rust", "both") and not HAS_RUST_CORE:
+        print("\n错误: 指定了 rust 引擎但扩展不可用。请先 `maturin develop --release`。")
+        return 1
 
-    for size in args.sizes:
-        astar_ms, steps = bench_astar(size, args.repeat)
-        dstar_ms = bench_dstar_incremental(size, args.repeat, args.updates)
-        print(
-            f"{size}x{size:<7} | {fmt(astar_ms):>14} | {fmt(dstar_ms):>18} | {steps:>8}"
-        )
+    if args.engine == "both":
+        with RustBackend.disabled():
+            _run_table(args.sizes, args.repeat, args.updates, "Python 原生")
+        _run_table(args.sizes, args.repeat, args.updates, "Rust 加速")
+    elif args.engine == "python":
+        with RustBackend.disabled():
+            _run_table(args.sizes, args.repeat, args.updates, "Python 原生")
+    else:
+        label = "Rust 加速" if RustBackend.is_available() else "Python 原生"
+        _run_table(args.sizes, args.repeat, args.updates, label)
 
     if not HAS_RUST_CORE:
         print(
             "\n提示: 未检测到 Rust 扩展，以上为 Python 原生实现的数据。\n"
-            "      构建 Rust 加速版后重跑本脚本即可得到对比列：\n"
-            "        pip install maturin && maturin develop --release"
+            "      构建后用 --engine both 可在同一次运行内得到双引擎对照表：\n"
+            "        pip install maturin && maturin develop --release\n"
+            "        python benchmarks/bench.py --engine both"
         )
     return 0
 

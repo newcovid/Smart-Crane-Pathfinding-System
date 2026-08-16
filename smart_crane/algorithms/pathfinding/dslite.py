@@ -51,10 +51,20 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         self.pending_expansions = 0
 
         self.use_octile_3d = use_octile_3d
-        # 确保启发式权重至少为常量定义的最小值，避免低于 1 导致非预期行为
-        self.heuristic_weight = max(
-            DSLITE_DEFAULT_HEURISTIC_MIN_WEIGHT, heuristic_weight
-        )
+
+        # D* Lite 的正确性依赖启发式的【一致性】(consistency)：
+        # 对任意相邻 u、v 需满足 h(u) <= cost(u,v) + h(v)。给 h 乘上 >1 的权重
+        # 会破坏这个前提，增量修复得到的 g 值不再是最短代价，路径可能次优甚至错误。
+        # 因此这里强制为 1.0——Rust 实现（dslite.rs 的 `_heuristic_weight: 1.0`）
+        # 本来就是这么做的，两个引擎必须一致，否则同一份配置会给出不同长度的路径。
+        # 加权只对 A* 有意义（weighted A*），见 AStarPlanner。
+        requested_weight = max(DSLITE_DEFAULT_HEURISTIC_MIN_WEIGHT, heuristic_weight)
+        if abs(requested_weight - 1.0) > EPSILON:
+            self.logger.warning(
+                f"D* Lite 忽略 heuristic_weight={requested_weight}，强制使用 1.0。"
+                f"加权启发式会破坏 D* Lite 所需的一致性前提；如需加权搜索请改用 A*。"
+            )
+        self.heuristic_weight = 1.0
 
         # D* Lite 核心数据结构 (仅 Python 模式使用)
         self.g: Dict[NodeType, float] = {}
@@ -196,9 +206,21 @@ class DLitePlanner(PathPlannerBase[NodeType]):
             return
 
         for change in changes:
+            # 入参契约：2D 为 (r, c, 新值)，3D 为 (r, c, l, 新值)。末位是值不是坐标。
+            expected_len = 4 if self.layers > 0 else 3
+            if len(change) != expected_len:
+                self.logger.warning(
+                    f"忽略格式非法的变更项 {change}："
+                    f"当前为 {'3D' if self.layers > 0 else '2D'} 地图，"
+                    f"期望 {expected_len} 元组 "
+                    f"{'(r, c, l, 新值)' if self.layers > 0 else '(r, c, 新值)'}。"
+                )
+                continue
+
             coords = change[:-1]
             u: NodeType = tuple(coords)
             if not self.is_valid(u):
+                self.logger.warning(f"忽略越界的变更点 {u}（地图 {self.rows}x{self.cols}）。")
                 continue
 
             # 更新受影响的节点及其邻居
@@ -362,7 +384,13 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         g_val = self.g.get(u, INF)
         rhs_val = self.rhs.get(u, INF)
 
-        if abs(g_val - rhs_val) <= EPSILON:
+        # 必须先做 `==` 判等再做 EPSILON 比较：两者同为 INF 时
+        # `abs(inf - inf)` 是 NaN，而 NaN 参与的任何比较都为 False，
+        # 会把"两侧都不可达"这种一致状态误判为不一致，从而把
+        # (INF, INF) 键反复塞回优先队列，推高扩展数并更早触发熔断重置。
+        # Rust 侧 `dslite.rs` 用的是 `> EPSILON` 判不一致，NaN 同样为 False，
+        # 因此天然落在"一致"分支——此处对齐 Rust 的行为。
+        if g_val == rhs_val or abs(g_val - rhs_val) <= EPSILON:
             # Consistent: 移除
             if u in self.open_keys:
                 del self.open_keys[u]
@@ -378,11 +406,13 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         expansions = 0
         while self.U:
             if expansions > self.max_nodes_expanded:
-                # 超过限定的最大扩展节点数，中止搜索以防阻塞
-                if expansions % self.max_nodes_expanded == 0:
-                    self.logger.warning(
-                        f"扩展节点超出限制（{self.max_nodes_expanded}），增量搜索中止。"
-                    )
+                # 超过限定的最大扩展节点数，中止搜索以防阻塞。
+                # （这里原有一层 `if expansions % max == 0` 的取模判断，但循环每轮
+                #   只加 1，首次越界时 expansions 恒为 max+1，取模恒为 1，
+                #   那条 warning 永远打印不出来。已去掉。）
+                self.logger.warning(
+                    f"扩展节点超出限制（{self.max_nodes_expanded}），增量搜索中止，将触发全量重置。"
+                )
                 return False
 
             # 取出堆顶项
@@ -438,9 +468,11 @@ class DLitePlanner(PathPlannerBase[NodeType]):
                 for s, cost in self._get_neighbors(u):
                     if self.is_obstacle(s):
                         continue
-                    # 更新前驱节点的 rhs
+                    # 仅当 u 能让前驱 s 变得更优时才需要重算 s。
+                    # 注意这里不再预先写入 self.rhs[s]——_update_vertex(s) 会
+                    # 从 s 的全部邻居重新求一遍 min，预写的值必然被覆盖，是死代码。
+                    # （Rust 侧 dslite.rs 就没有这一句，两边逻辑本就等价。）
                     if self.rhs.get(s, INF) > rhs_u + cost:
-                        self.rhs[s] = rhs_u + cost
                         self._update_vertex(s)
             else:
                 # Underconsistent: g < rhs -> 令 g = INF，变为非常不一致，迫使邻居重算

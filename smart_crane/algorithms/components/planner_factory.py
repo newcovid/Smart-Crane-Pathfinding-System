@@ -1,9 +1,9 @@
 import logging
 import threading
-from typing import List, Any, Optional, Union, TYPE_CHECKING
+from typing import List, Optional, Union, TYPE_CHECKING
 
 from smart_crane.core.config import Settings
-from smart_crane.core.constants import ALGO_DSLITE
+from smart_crane.core.constants import ALGO_ASTAR, ALGO_DSLITE
 from smart_crane.algorithms.pathfinding.base import PathPlannerBase
 from smart_crane.algorithms.pathfinding.astar import AStarPlanner
 from smart_crane.algorithms.pathfinding.dslite import DLitePlanner
@@ -78,9 +78,15 @@ class PlannerFactory:
 
         if algo_type == ALGO_DSLITE:
             return DLitePlanner(**common_args, enable_rust=enable_rust)
-        else:
-            # 默认为 A*
-            return AStarPlanner(**common_args, enable_rust=enable_rust)
+
+        if algo_type != ALGO_ASTAR:
+            # 不认识的算法名不能静默落到 A*：配置写错了却照常运行，
+            # 使用者会以为自己跑的是 D* Lite。
+            (logger or logging.getLogger(__name__)).warning(
+                f"未知的算法类型 {algo_type!r}，回退到 {ALGO_ASTAR}。"
+                f"可选值: {ALGO_ASTAR}, {ALGO_DSLITE}。"
+            )
+        return AStarPlanner(**common_args, enable_rust=enable_rust)
 
     @staticmethod
     def create_post_processors(

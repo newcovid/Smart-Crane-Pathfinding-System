@@ -31,6 +31,7 @@ from smart_crane.core.crane_service import CraneService
 from smart_crane.core.constants import (
     MSG_PLAN_SUCCESS,
     MSG_PLAN_FAIL,
+    MSG_CONFIG_NO_CHANGE,
     LOG_LEVEL_WIDTH,
     LOGGER_NAME_WIDTH,
     DEFAULT_SERVER_HOST,
@@ -305,7 +306,7 @@ def handle_request_path(data: Dict[str, Any]) -> None:
         success, msg = crane_service.update_configuration(data["settings"])
         if not success:
             logger.warning(f"规划前配置自动更新失败: {msg}")
-        elif msg != "配置未发生变化":
+        elif msg != MSG_CONFIG_NO_CHANGE:
             socketio.emit("update_map_state", crane_service.get_full_state())
 
     if "start" in data or "end" in data:

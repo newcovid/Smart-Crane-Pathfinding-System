@@ -1,6 +1,6 @@
 import math
 import logging
-from typing import List, Tuple, Dict, Optional, Any, Union, TYPE_CHECKING
+from typing import List, Tuple, Dict, Optional, Any, TYPE_CHECKING
 
 from smart_crane.core.constants import (
     BOUNDARY_EPS,

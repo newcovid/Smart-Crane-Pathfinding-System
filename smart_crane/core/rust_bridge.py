@@ -1,5 +1,5 @@
 import logging
-import importlib
+from contextlib import contextmanager
 from typing import Optional, Any, Type
 
 # =============================================================================
@@ -33,6 +33,15 @@ except Exception as e:
     logger.error(f"加载 'smart_crane_core' 时发生严重错误: {e}", exc_info=True)
 
 
+# 运行时开关。与 HAS_RUST_CORE 是两件事：
+#   HAS_RUST_CORE —— 扩展【能不能】加载（进程启动时决定，只读）
+#   _enabled      —— 扩展【要不要】用（由 ENABLE_RUST_CORE 配置驱动，可切换）
+# 拆开是必需的：此前 enable_rust_core 只传给了规划器，而地图生成、C-Space 膨胀、
+# 智能脱困、后处理都直接查 HAS_RUST_CORE，导致"关掉开关"只关掉了一半，
+# 也使得装了扩展之后 Python 实现一行都测不到。
+_enabled: bool = True
+
+
 class RustBackend:
     """Rust 后端代理 (Rust Backend Proxy)。
 
@@ -44,13 +53,41 @@ class RustBackend:
     """
 
     @staticmethod
+    def is_extension_loaded() -> bool:
+        """扩展二进制是否成功导入（不受运行时开关影响）。"""
+        return HAS_RUST_CORE
+
+    @staticmethod
+    def set_enabled(flag: bool) -> None:
+        """全局启用/禁用 Rust 后端。
+
+        禁用后所有 ``get_*_class()`` 一律返回 None，各调用点自然回落到
+        Python 实现——这是让两套实现能被同一组测试覆盖的前提。
+        """
+        global _enabled
+        if _enabled != flag:
+            logger.info(f"Rust 后端已{'启用' if flag else '禁用'}。")
+        _enabled = flag
+
+    @staticmethod
+    @contextmanager
+    def disabled():
+        """临时禁用 Rust 后端的上下文管理器，供测试与基准对照使用。"""
+        prev = _enabled
+        RustBackend.set_enabled(False)
+        try:
+            yield
+        finally:
+            RustBackend.set_enabled(prev)
+
+    @staticmethod
     def is_available() -> bool:
-        """检查 Rust 核心扩展是否可用。
+        """检查 Rust 核心扩展当前是否可用（已加载 **且** 未被禁用）。
 
         Returns:
-            bool: True 表示 Rust 模块已加载，可以使用高性能算法。
+            bool: True 表示可以使用高性能算法。
         """
-        return HAS_RUST_CORE
+        return HAS_RUST_CORE and _enabled
 
     # =========================================================================
     # 寻路相关 (Pathfinding)
@@ -63,7 +100,7 @@ class RustBackend:
         Returns:
             Optional[Type[Any]]: 如果可用，返回 `RustAStarPlanner` 类；否则返回 None。
         """
-        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustAStarPlanner"):
+        if RustBackend.is_available() and _rust_module and hasattr(_rust_module, "RustAStarPlanner"):
             return _rust_module.RustAStarPlanner
         return None
 
@@ -74,7 +111,7 @@ class RustBackend:
         Returns:
             Optional[Type[Any]]: 如果可用，返回 `RustDLitePlanner` 类；否则返回 None。
         """
-        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustDLitePlanner"):
+        if RustBackend.is_available() and _rust_module and hasattr(_rust_module, "RustDLitePlanner"):
             return _rust_module.RustDLitePlanner
         return None
 
@@ -91,7 +128,7 @@ class RustBackend:
         Returns:
             Optional[Type[Any]]: `RustMapManager` 类或 None。
         """
-        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustMapManager"):
+        if RustBackend.is_available() and _rust_module and hasattr(_rust_module, "RustMapManager"):
             return _rust_module.RustMapManager
         return None
 
@@ -109,7 +146,7 @@ class RustBackend:
             Optional[Any]: `RustPostProcessor` 类或 None。
         """
         if (
-            HAS_RUST_CORE
+            RustBackend.is_available()
             and _rust_module
             and hasattr(_rust_module, "RustPostProcessor")
         ):
@@ -123,13 +160,13 @@ class RustBackend:
     @staticmethod
     def get_safety_guard_class() -> Optional[Any]:
         """获取 Rust 版安全守卫类。"""
-        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustSafetyGuard"):
+        if RustBackend.is_available() and _rust_module and hasattr(_rust_module, "RustSafetyGuard"):
             return _rust_module.RustSafetyGuard
         return None
 
     @staticmethod
     def get_grid_adapter_class() -> Optional[Any]:
         """获取 Rust 版网格适配器类。"""
-        if HAS_RUST_CORE and _rust_module and hasattr(_rust_module, "RustGridAdapter"):
+        if RustBackend.is_available() and _rust_module and hasattr(_rust_module, "RustGridAdapter"):
             return _rust_module.RustGridAdapter
         return None

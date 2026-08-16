@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  # 纯 Python 路径：不构建 Rust 扩展，验证降级实现本身是完整可用的。
+  python:
+    name: Python 原生 (${{ matrix.os }} / py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 运行测试
+        run: python -m unittest discover -s tests -v
+
+      - name: 冒烟基准（小规模，仅确认可运行）
+        run: python benchmarks/bench.py --sizes 60 --repeat 1 --updates 5
+
+  # Rust 路径：构建 PyO3 扩展后跑同一组测试。
+  # 两套实现共用测试，这一步就是它们的等价性校验。
+  rust:
+    name: Rust 加速 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # fmt 与 clippy 暂设为 advisory：首次跑通、确认现有代码已合规之后，
+      # 删掉 continue-on-error 即可转为强制门禁。
+      - name: cargo fmt（advisory）
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy（advisory）
+        continue-on-error: true
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: 构建并安装扩展
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt maturin
+          maturin develop --release
+
+      - name: 确认扩展已加载（不允许静默降级）
+        run: |
+          python -c "from smart_crane.core.rust_bridge import HAS_RUST_CORE; assert HAS_RUST_CORE, 'Rust 扩展未加载，本 job 失去意义'; print('HAS_RUST_CORE = True')"
+
+      - name: 运行测试（Rust 引擎）
+        run: python -m unittest discover -s tests -v
+
+  # 基准对照：同一台 runner 上先跑 Python 原生，再构建 Rust 后重跑。
+  # 结果写进 job summary，可直接摘录到 README。
+  benchmark:
+    name: 基准对照 (Python vs Rust)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt maturin
+
+      - name: 基准 — Python 原生
+        run: |
+          {
+            echo '## 基准对照'
+            echo
+            echo '<details><summary>Python 原生</summary>'
+            echo
+            echo '```'
+            python benchmarks/bench.py --sizes 100 200 300 --repeat 3
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 基准 — Rust 加速
+        run: |
+          maturin develop --release
+          {
+            echo '<details open><summary>Rust 加速</summary>'
+            echo
+            echo '```'
+            python benchmarks/bench.py --sizes 100 200 300 --repeat 3
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"

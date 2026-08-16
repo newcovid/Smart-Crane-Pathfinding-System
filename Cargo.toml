@@ -1,7 +1,9 @@
 [package]
 name = "smart_crane_core"
-version = "0.1.0"
+version = "0.4.0"
 edition = "2021"
+license = "MIT"
+description = "High-performance pathfinding core for Smart Crane (A*, D* Lite, Bezier smoothing)"
 
 # 生成动态链接库供 Python 调用
 [lib]
@@ -12,8 +14,6 @@ crate-type = ["cdylib"]
 # PyO3 用于 Python 绑定
 pyo3 = { version = "0.23.3", features = ["extension-module"] }
 
-# 社区成熟的寻路算法库
-pathfinding = "4.14"
 
 # 用于处理浮点数哈希（A* 需要 Eq/Hash trait）
 ordered-float = "4.6.0"

@@ -197,6 +197,10 @@ class GridAdapter:
 
         if is_fixed_height:
             # === 2D Diff ===
+            # 障碍物顶面低于巡航层减安全余量时，它压根投影不到 2D 规划网格上，
+            # 整个 Diff 可以跳过。注意这个判断【只决定 should_update】，
+            # 不能把扫描循环套进 `if not is_infinite_obs` 里——
+            # obstacle_infinite_height 默认为 True，那样默认配置下永远返回空列表。
             should_update = True
             if not is_infinite_obs:
                 cruise_z = settings.crane.safe_travel_z_m
@@ -208,10 +212,10 @@ class GridAdapter:
                 if z <= z_threshold:
                     should_update = False
 
-                if should_update:
-                    for r in range(r_start, r_end):
-                        for c in range(c_start, c_end):
-                            val_new = new_grid[r][c]
+            if should_update:
+                for r in range(r_start, r_end):
+                    for c in range(c_start, c_end):
+                        val_new = new_grid[r][c]
                         val_old = 0
                         if old_grid is not None:
                             if 0 <= r < len(old_grid) and 0 <= c < len(old_grid[0]):
@@ -289,8 +293,12 @@ class GridAdapter:
                 return self.RustAdapter.grid_to_world_smart(
                     node, override_z, self.map_mgr.rust_map
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # 不要静默吞掉：坐标转换出错会让整条轨迹偏移，
+                # 而没有日志的话这种偏移无从追查。
+                self.logger.warning(
+                    f"Rust grid_to_world_smart 失败，回退 Python 实现: {e}"
+                )
 
         if len(node) == 2:
             wx, wy, _ = self.map_mgr.grid_to_world(node[0], node[1], 0)

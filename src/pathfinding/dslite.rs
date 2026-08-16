@@ -125,7 +125,11 @@ impl RustDLitePlanner {
         Ok(Self {
             grid: flat_grid,
             use_octile_3d,
-            _heuristic_weight: 1.0, // D* Lite 原理上通常要求 H 一致性，固定为 1.0 较为安全
+            // 刻意忽略入参：D* Lite 的正确性依赖启发式的一致性
+            // (h(u) <= cost(u,v) + h(v))，加权会破坏该前提。
+            // Python 侧 DLitePlanner 同样强制 1.0 并在权重 != 1 时告警，
+            // 两个引擎必须保持一致，否则同一配置会产出不同长度的路径。
+            _heuristic_weight: 1.0,
             g: HashMap::new(),
             rhs: HashMap::new(),
             u_queue: BinaryHeap::new(),

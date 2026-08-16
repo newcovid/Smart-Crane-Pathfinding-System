@@ -200,20 +200,26 @@ class PathPlannerBase(ABC, Generic[NodeType]):
         return False
 
     def is_obstacle(self, p: Union[Point2D, Point3D]) -> bool:
-        """检查坐标是否为障碍物。
+        """检查坐标是否为障碍物。越界一律视为障碍物。
+
+        越界必须先于取值判断。Python 的负索引会回绕到序列末尾：
+        ``grid[-1][c]`` 取到的是最后一行，于是 ``(-1, c)`` 会拿到地图对侧
+        边界的内容，使地图四条边上的对角线穿越判定（见 ``_get_neighbors``
+        中对 ``(r+dr, c)`` / ``(r, c+dc)`` 的检查）时对时错。
+        Rust 侧 ``is_obstacle_unsafe`` 已经是"越界即障碍"，此处与之对齐。
 
         Args:
             p: 坐标点。
 
         Returns:
-            bool: True 表示是障碍物，False 表示可行。
+            bool: True 表示是障碍物或越界，False 表示可行。
         """
+        if not self.is_valid(p):
+            return True
         # 注意：这里假设网格中 GRID_OCCUPIED 表示障碍物
         if len(p) == 2:
             return self.grid[p[0]][p[1]] == GRID_OCCUPIED
-        elif len(p) == 3:
-            return self.grid[p[0]][p[1]][p[2]] == GRID_OCCUPIED
-        return True
+        return self.grid[p[0]][p[1]][p[2]] == GRID_OCCUPIED
 
     def is_safe(self, p: Union[Point2D, Point3D]) -> bool:
         """检查坐标是否安全（既在范围内又不是障碍物）。"""
