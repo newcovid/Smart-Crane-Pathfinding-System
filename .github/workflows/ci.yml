@@ -113,13 +113,14 @@ jobs:
 
       - name: 基准 — Python 原生
         run: |
+          python benchmarks/bench.py --sizes 100 200 300 --repeat 3 | tee bench-python.txt
           {
             echo '## 基准对照'
             echo
             echo '<details><summary>Python 原生</summary>'
             echo
             echo '```'
-            python benchmarks/bench.py --sizes 100 200 300 --repeat 3
+            cat bench-python.txt
             echo '```'
             echo
             echo '</details>'
@@ -129,12 +130,19 @@ jobs:
         run: |
           maturin build --release --out dist
           pip install --no-index --find-links dist smart_crane_core
+          python benchmarks/bench.py --sizes 100 200 300 --repeat 3 | tee bench-rust.txt
           {
             echo '<details open><summary>Rust 加速</summary>'
             echo
             echo '```'
-            python benchmarks/bench.py --sizes 100 200 300 --repeat 3
+            cat bench-rust.txt
             echo '```'
             echo
             echo '</details>'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 上传基准结果
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: bench-*.txt
