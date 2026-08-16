@@ -164,6 +164,10 @@ impl RustDLitePlanner {
     /// # Returns
     /// (bool success, usize nodes_expanded_in_this_step)
     pub fn initialize(&mut self, start: (i32, i32, i32), goal: (i32, i32, i32)) -> (bool, usize) {
+        // 与 Python 侧 DLitePlanner.initialize 对齐：重规划计数按任务归零。
+        // 此前是跨请求累计的 AtomicUsize，前端统计面板会看到一个只增不减的数字，
+        // 也使两个引擎的该项指标不可比。
+        self.replanning_count_stat.store(0, AtomicOrdering::Relaxed);
         let start_nodes_count = self.nodes_expanded_stat.load(AtomicOrdering::Relaxed);
         let s_node = Node::new(start.0, start.1, start.2);
         let g_node = Node::new(goal.0, goal.1, goal.2);
@@ -387,9 +391,9 @@ impl RustDLitePlanner {
 
     /// 启发式函数 H(a, b)。
     fn heuristic(&self, a: &Node, b: &Node) -> f32 {
-        let dx = (a.x - b.x).abs() as f32;
-        let dy = (a.y - b.y).abs() as f32;
-        let dz = (a.z - b.z).abs() as f32;
+        let dx = (a.row - b.row).abs() as f32;
+        let dy = (a.col - b.col).abs() as f32;
+        let dz = (a.layer - b.layer).abs() as f32;
         if self.grid.layers <= 1 {
             let min_d = dx.min(dy);
             (dx + dy) + (COST_2 - 2.0) * min_d
@@ -589,15 +593,15 @@ impl RustDLitePlanner {
                 (-1, -1, COST_2),
             ];
             for &(dr, dc, cost) in &moves {
-                let nr = node.x + dr;
-                let nc = node.y + dc;
+                let nr = node.row + dr;
+                let nc = node.col + dc;
                 let next = Node::new(nr, nc, 0);
                 if !self.grid.is_safe(&next) {
                     continue;
                 }
                 if dr != 0 && dc != 0 {
-                    let c1 = Node::new(node.x + dr, node.y, 0);
-                    let c2 = Node::new(node.x, node.y + dc, 0);
+                    let c1 = Node::new(node.row + dr, node.col, 0);
+                    let c2 = Node::new(node.row, node.col + dc, 0);
                     if self.grid.is_obstacle_unsafe(&c1) || self.grid.is_obstacle_unsafe(&c2) {
                         continue;
                     }
@@ -611,16 +615,16 @@ impl RustDLitePlanner {
                         if dx == 0 && dy == 0 && dz == 0 {
                             continue;
                         }
-                        let nx = node.x + dx;
-                        let ny = node.y + dy;
-                        let nz = node.z + dz;
+                        let nx = node.row + dx;
+                        let ny = node.col + dy;
+                        let nz = node.layer + dz;
                         let next = Node::new(nx, ny, nz);
                         if !self.grid.is_safe(&next) {
                             continue;
                         }
                         if dx != 0 && dy != 0 {
-                            let c1 = Node::new(node.x + dx, node.y, node.z);
-                            let c2 = Node::new(node.x, node.y + dy, node.z);
+                            let c1 = Node::new(node.row + dx, node.col, node.layer);
+                            let c2 = Node::new(node.row, node.col + dy, node.layer);
                             if !self.grid.is_safe(&c1) || !self.grid.is_safe(&c2) {
                                 continue;
                             }

@@ -23,9 +23,6 @@ pub const EPSILON: f32 = 1e-4;
 /// 浮点数不等性比较的宽松容差 (Inequality Check)
 pub const FLOAT_TOLERANCE: f32 = 1e-3;
 
-/// 默认的高空 Z 值 (用于无限高模式或找不到 Z 值时)
-pub const DEFAULT_Z_HIGH: f32 = 100.0;
-
 // --- 性能优化常量 ---
 
 /// 障碍物数量阈值

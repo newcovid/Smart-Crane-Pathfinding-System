@@ -15,6 +15,7 @@ from smart_crane.core.map_manager import WorkshopMapManager
 from smart_crane.core.rust_bridge import RustBackend
 from smart_crane.algorithms.trajectory_planner import TrajectoryPlanner
 from smart_crane.core.constants import (
+    DEFAULT_Z_HIGH,
     MSG_CONFIG_UPDATE,
     MSG_CONFIG_NO_CHANGE,
     MSG_REBUILD_MAP,
@@ -343,7 +344,7 @@ class CraneService:
             obs["y_m"],
             obs["w_m"],
             obs["h_m"],
-            obs.get("z_m", 0),
+            obs.get("z_m", DEFAULT_Z_HIGH),  # 缺键的默认值须与 map_manager 一致
             is_add=False,
         )
         return True, MSG_OBS_REMOVED.format(id=oid)

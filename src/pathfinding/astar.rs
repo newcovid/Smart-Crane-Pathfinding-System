@@ -180,12 +180,18 @@ impl RustAStarPlanner {
         while let Some(item) = open_set.pop() {
             let current = item.node;
 
-            // 如果堆中的节点代价已经劣于已知的 g_score (懒惰删除策略)，则跳过
-            // 注意：Rust 的 BinaryHeap 不支持 decrease_key，通常通过 push 新值并在此处检查来处理
-            // 但此处我们直接取值，不严格检查 stale entry 也是一种常见做法，
-            // 若需严格 correctness: if item.f_score > f_score_of_current ...
-
             let current_g: f32 = *g_score.get(&current).unwrap_or(&f32::INFINITY);
+
+            // 懒惰删除：BinaryHeap 不支持 decrease_key，同一节点会被以不同的
+            // f_score 多次压入。若弹出项的 f_score 已劣于该节点当前最优的
+            // g + h，说明它是过期副本，跳过且【不计入】扩展数。
+            //
+            // 早期实现省略了这一步，导致同一节点被重复计数，nodes_expanded
+            // 系统性偏高，无法与 Python 侧（有 open_set_hash 做懒删除）横向比较。
+            let best_f = current_g + self.heuristic(&current, &goal);
+            if item.f_score.into_inner() > best_f + EPSILON {
+                continue;
+            }
 
             nodes_expanded += 1;
 
@@ -243,8 +249,8 @@ impl RustAStarPlanner {
     ///
     /// 根据配置使用欧几里得距离或 Octile 距离。
     fn heuristic(&self, a: &Node, b: &Node) -> f32 {
-        let dx = (a.x - b.x).abs() as f32;
-        let dy = (a.y - b.y).abs() as f32;
+        let dx = (a.row - b.row).abs() as f32;
+        let dy = (a.col - b.col).abs() as f32;
         let h_val: f32;
 
         if self.grid.layers <= 1 {
@@ -256,7 +262,7 @@ impl RustAStarPlanner {
             h_val = (dx + dy) + (COST_2 - 2.0) * min_delta;
         } else {
             // 3D 情况
-            let dz = (a.z - b.z).abs() as f32;
+            let dz = (a.layer - b.layer).abs() as f32;
             if self.use_octile_3d {
                 let mut delta = [dx, dy, dz];
                 // 排序以找到最小、中间和最大差值
@@ -301,8 +307,8 @@ impl RustAStarPlanner {
             ];
 
             for &(dr, dc, cost) in &moves {
-                let nr = node.x + dr;
-                let nc = node.y + dc;
+                let nr = node.row + dr;
+                let nc = node.col + dc;
                 let next = Node::new(nr, nc, 0);
 
                 // 1. 基础边界和障碍物检查
@@ -312,8 +318,8 @@ impl RustAStarPlanner {
 
                 // 2. 对角线移动的额外碰撞检测 (防止穿过两个障碍物的夹角)
                 if dr != 0 && dc != 0 {
-                    let c1 = Node::new(node.x + dr, node.y, 0);
-                    let c2 = Node::new(node.x, node.y + dc, 0);
+                    let c1 = Node::new(node.row + dr, node.col, 0);
+                    let c2 = Node::new(node.row, node.col + dc, 0);
                     // 如果两个分量方向都是障碍物，则不能走对角线
                     if self.grid.is_obstacle_unsafe(&c1) || self.grid.is_obstacle_unsafe(&c2) {
                         continue;
@@ -329,9 +335,9 @@ impl RustAStarPlanner {
                         if dx == 0 && dy == 0 && dz == 0 {
                             continue;
                         }
-                        let nx = node.x + dx;
-                        let ny = node.y + dy;
-                        let nz = node.z + dz;
+                        let nx = node.row + dx;
+                        let ny = node.col + dy;
+                        let nz = node.layer + dz;
                         let next = Node::new(nx, ny, nz);
 
                         if !self.grid.is_safe(&next) {
@@ -340,8 +346,8 @@ impl RustAStarPlanner {
 
                         // 3D 对角线检查 (简化版：仅检查水平面对角线，如果 dz!=0 且 dx,dy!=0 需要更严谨逻辑，此处沿用 2D 逻辑的扩展)
                         if dx != 0 && dy != 0 {
-                            let c1 = Node::new(node.x + dx, node.y, node.z);
-                            let c2 = Node::new(node.x, node.y + dy, node.z);
+                            let c1 = Node::new(node.row + dx, node.col, node.layer);
+                            let c2 = Node::new(node.row, node.col + dy, node.layer);
                             // 与 Python 侧 `is_obstacle(...) or is_obstacle(...)` 同义：
                             // is_obstacle_unsafe 把越界一律视为障碍，is_safe 是它的否定，
                             // 两侧对边界的处理已一致。

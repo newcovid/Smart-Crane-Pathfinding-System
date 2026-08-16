@@ -1,4 +1,4 @@
-use crate::common::constants::{DEFAULT_Z_HIGH, OBSTACLE_COUNT_THRESHOLD};
+use crate::common::constants::OBSTACLE_COUNT_THRESHOLD;
 use crate::map::Obstacle;
 use log::{debug, info};
 use std::f32;
@@ -32,7 +32,7 @@ impl GridFactory {
         let active_obstacles: Vec<&Obstacle> = obstacles
             .iter()
             .filter(|&&o| {
-                let obs_h = if o.z_m == 0.0 { DEFAULT_Z_HIGH } else { o.z_m };
+                let obs_h = o.z_m;
                 match z_threshold {
                     Some(th) => obs_h > th,
                     None => true,
@@ -300,7 +300,7 @@ impl GridFactory {
             let obs_occupy_z = if is_infinite {
                 map_height_m + 1.0
             } else {
-                let z = if o.z_m == 0.0 { DEFAULT_Z_HIGH } else { o.z_m };
+                let z = o.z_m;
                 z + z_margin_obs
             };
 

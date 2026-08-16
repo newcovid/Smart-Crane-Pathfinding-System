@@ -5,24 +5,30 @@ use std::time::Instant;
 
 /// 通用节点坐标 (x, y, z)
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Copy, PartialOrd, Ord)]
+/// 栅格节点。
+///
+/// 字段名刻意用 row/col/layer 而非 x/y/z：`world_to_grid` 返回的是
+/// `(row, col, layer)`，即第一个分量对应 **Y 轴**（长度方向）、第二个对应
+/// **X 轴**（宽度方向）。早期命名为 x/y/z，与直觉相反，读代码时极易把
+/// 行列搞混。
 pub struct Node {
-    pub x: i32,
-    pub y: i32,
-    pub z: i32,
+    pub row: i32,
+    pub col: i32,
+    pub layer: i32,
 }
 
 impl Node {
-    pub fn new(x: i32, y: i32, z: i32) -> Self {
-        Self { x, y, z }
+    pub fn new(row: i32, col: i32, layer: i32) -> Self {
+        Self { row, col, layer }
     }
 
     pub fn to_tuple(self, is_3d: bool) -> Py<PyAny> {
         Python::attach(|py| {
             if is_3d {
-                let elements = [self.x, self.y, self.z];
+                let elements = [self.row, self.col, self.layer];
                 PyTuple::new(py, elements).unwrap().into_any().unbind()
             } else {
-                let elements = [self.x, self.y];
+                let elements = [self.row, self.col];
                 PyTuple::new(py, elements).unwrap().into_any().unbind()
             }
         })
@@ -41,14 +47,19 @@ pub struct FlatGrid {
 impl FlatGrid {
     #[inline(always)]
     pub fn is_valid(&self, n: &Node) -> bool {
-        n.x >= 0 && n.x < self.rows && n.y >= 0 && n.y < self.cols && n.z >= 0 && n.z < self.layers
+        n.row >= 0
+            && n.row < self.rows
+            && n.col >= 0
+            && n.col < self.cols
+            && n.layer >= 0
+            && n.layer < self.layers
     }
 
     #[inline(always)]
     pub fn is_obstacle_unsafe(&self, n: &Node) -> bool {
-        let idx = (n.x as usize * self.cols as usize * self.layers as usize)
-            + (n.y as usize * self.layers as usize)
-            + (n.z as usize);
+        let idx = (n.row as usize * self.cols as usize * self.layers as usize)
+            + (n.col as usize * self.layers as usize)
+            + (n.layer as usize);
         if idx >= self.data.len() {
             return true;
         }
@@ -74,9 +85,9 @@ impl FlatGrid {
         if !self.is_valid(n) {
             return false;
         }
-        let idx = (n.x as usize * self.cols as usize * self.layers as usize)
-            + (n.y as usize * self.layers as usize)
-            + (n.z as usize);
+        let idx = (n.row as usize * self.cols as usize * self.layers as usize)
+            + (n.col as usize * self.layers as usize)
+            + (n.layer as usize);
         if idx >= self.data.len() {
             return false;
         }

@@ -149,7 +149,16 @@ def process_css_bundle(css_content, css_url, local_css_rel_path):
         # 最稳妥的方法是：保持相对路径结构
 
         asset_local_path = os.path.join(css_dir, relative_url.split("?")[0])
-        # 如果路径里有 ../，os.path.join 会处理，但我们要确保它在 VENDOR_DIR 内（这里假设它是安全的）
+
+        # 路径穿越校验：远程 CSS 里的 url(../../x) 会被 os.path.join 如实解析，
+        # 可以写到 VENDOR_DIR 之外的任意位置。这些 CSS 来自第三方 CDN，
+        # 不能假定其内容可信。
+        resolved = os.path.realpath(asset_local_path)
+        if os.path.commonpath([resolved, os.path.realpath(VENDOR_DIR)]) != os.path.realpath(
+            VENDOR_DIR
+        ):
+            logger.error(f"   ⚠ 跳过越界资源路径: {relative_url} -> {resolved}")
+            continue
 
         # 下载资源
         try:
@@ -174,7 +183,7 @@ def process_css_bundle(css_content, css_url, local_css_rel_path):
 def main():
     print("=" * 60)
     print("   🚀 智能起重机控制台 - 依赖同步工具")
-    print("   集成镜像加速、断点续传、CSS资源解析")
+    print("   集成镜像加速与 CSS 资源解析")
     print("=" * 60)
 
     success_count = 0

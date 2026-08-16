@@ -138,7 +138,7 @@ class PathPostProcessor(ABC):
 
         # 3. 统计与记录
         end_time = time.perf_counter()
-        elapsed_ms = (end_time - start_time) * 1000.0
+        elapsed_ms = (end_time - start_time) * TIME_MS_MULTIPLIER
         output_len = len(result_path)
 
         self.stats["process_time_ms"] = elapsed_ms

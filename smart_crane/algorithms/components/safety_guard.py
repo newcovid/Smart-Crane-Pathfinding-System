@@ -161,6 +161,7 @@ class SafetyGuard:
                     z_margin,
                     max_search_r,
                     is_infinite,
+                    len(node) > 2,  # search_3d：与 Python 回退实现的 dims 判据一致
                 )
 
                 if result:

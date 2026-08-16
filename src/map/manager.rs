@@ -1,4 +1,3 @@
-use crate::common::constants::DEFAULT_Z_HIGH;
 use crate::map::grid_factory::GridFactory;
 use crate::map::Obstacle;
 use log::{debug, info};
@@ -189,7 +188,7 @@ impl RustMapManager {
                 if ignore_z {
                     return true;
                 }
-                let obs_z = if o.z_m == 0.0 { DEFAULT_Z_HIGH } else { o.z_m };
+                let obs_z = o.z_m;
                 if obs_z >= z - z_margin {
                     return true;
                 }

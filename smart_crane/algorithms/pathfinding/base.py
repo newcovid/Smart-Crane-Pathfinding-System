@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict, Any, Optional, Union, TypeVar, Generic
 from contextlib import contextmanager
 from smart_crane.core.constants import (
+    TIME_MS_MULTIPLIER,
     DEFAULT_RESOLUTION,
     GRID_OCCUPIED,
     PERFORMANCE_WARNING_THRESHOLD_MS,
@@ -233,7 +234,7 @@ class PathPlannerBase(ABC, Generic[NodeType]):
             yield
         finally:
             end_time = time.perf_counter()
-            elapsed_ms = (end_time - start_time) * 1000.0
+            elapsed_ms = (end_time - start_time) * TIME_MS_MULTIPLIER
             self.stats["compute_time_ms"] = elapsed_ms
             self.stats["timestamp"] = time.time()
 

@@ -157,19 +157,24 @@ class TestDStarLiteIncremental(unittest.TestCase):
             defects, [], f"{len(defects)} 次增量更新后 D* Lite 找不到路径而 A* 能找到：{defects[:5]}"
         )
 
-    def test_incremental_is_faster_than_full_replan(self):
-        """增量重规划应显著快于同规模的 A* 全量搜索。"""
-        import time
+    def test_incremental_expands_far_fewer_nodes(self):
+        """增量重规划扩展的节点数应远少于同规模的 A* 全量搜索。
 
+        断言的是结构性指标而非墙钟时间：后者在 CI 的共享 runner 上会因
+        邻居负载抖动而偶发失败，且掩盖了"为什么更快"——真正的原因是
+        D* Lite 只重算受障碍物变更影响的那部分节点。
+        """
         size = 100
         grid = build_grid(size)
         start, goal = (0, 0), (size - 1, size - 1)
 
-        astar = AStarPlanner(grid=[r[:] for r in grid], width_m=float(size), length_m=float(size))
+        astar = AStarPlanner(
+            grid=[r[:] for r in grid], width_m=float(size), length_m=float(size)
+        )
         astar.initialize(start, goal)
-        t0 = time.perf_counter()
         self.assertTrue(astar.compute_path(start))
-        astar_ms = (time.perf_counter() - t0) * 1000
+        astar_expanded = astar.stats["nodes_expanded"]
+        self.assertGreater(astar_expanded, 0, "A* 未上报扩展节点数")
 
         dstar = DLitePlanner(grid=grid, width_m=float(size), length_m=float(size))
         dstar.initialize(start, goal)
@@ -182,14 +187,16 @@ class TestDStarLiteIncremental(unittest.TestCase):
             c = rng.randrange(size // 4, size * 3 // 4)
             new_state = GRID_OCCUPIED if grid[r][c] == GRID_FREE else GRID_FREE
             grid[r][c] = new_state
+            before = dstar.stats.get("nodes_expanded", 0)
             dstar.update_obstacles([(r, c, new_state)])
-            t0 = time.perf_counter()
             dstar.compute_path(start)
-            samples.append((time.perf_counter() - t0) * 1000)
+            samples.append(abs(dstar.stats.get("nodes_expanded", 0) - before))
 
         median = sorted(samples)[len(samples) // 2]
         self.assertLess(
-            median, astar_ms / 2, f"增量 {median:.1f}ms 未显著快于全量 {astar_ms:.1f}ms"
+            median,
+            astar_expanded / 2,
+            f"单次增量重规划扩展 {median} 个节点，未显著少于 A* 全量的 {astar_expanded}",
         )
 
 
@@ -204,8 +211,13 @@ class TestEngineEquivalence(unittest.TestCase):
     任何一侧的单位换算、哨兵语义、浮点判据、维度判断出现偏差，
     都会在这里暴露成"同一张图、同一份配置、两个不同的答案"。
 
-    注意断言的是【代价等价】而非【逐点相同】：Rust 用 f32、Python 用 f64，
-    代价相同的多条路径在 tie-break 时可能选择不同分支。
+    关于"等价"的实测边界（见下方两个用例）：
+    - **D\* Lite 的路径逐点相同**，两个引擎给出完全一致的节点序列。
+    - **A\* 的路径代价相同但节点序列可能不同**。两侧的 tie-break 规则本身
+      是一致的（先比 f，再比坐标字典序），差异来自浮点宽度：相差 1e-8 的
+      两个 f 在 f32 下并列、在 f64 下不并列，弹出顺序随之改变。
+      两条路径都是最优解，因此不把 Rust 改成 f64 去换取逐点一致——
+      那是拿真实性能换一个不影响正确性的性质。
     """
 
     SIZES = (40, 80)
@@ -265,6 +277,22 @@ class TestEngineEquivalence(unittest.TestCase):
                     self._path_cost(rs_path),
                     places=3,
                     msg=f"{size}x{size} 上两引擎 D* Lite 代价不一致",
+                )
+
+    def test_dstar_paths_are_point_identical(self):
+        """D* Lite 的路径在两个引擎下逐点相同。
+
+        这是比"代价相等"更强的性质，实测成立，故用测试锁住：
+        一旦某侧的 tie-break 或代价常量被改动，这里会先于其他用例失败。
+        """
+        for size in self.SIZES:
+            with self.subTest(size=size):
+                grid = build_grid(size)
+                with RustBackend.disabled():
+                    py_path = self._plan(DLitePlanner, grid, size, enable_rust=False)
+                rs_path = self._plan(DLitePlanner, grid, size, enable_rust=True)
+                self.assertEqual(
+                    py_path, rs_path, f"{size}x{size} 上两引擎的 D* Lite 路径不逐点相同"
                 )
 
     def test_inflation_matches_exactly(self):

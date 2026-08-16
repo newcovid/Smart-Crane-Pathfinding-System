@@ -6,6 +6,8 @@ from typing import List, Tuple, Dict, Optional, Any
 from .base import PathPlannerBase, NodeType
 from smart_crane.core.rust_bridge import RustBackend
 from smart_crane.core.constants import (
+    A_STAR_DEFAULT_RESOLUTION,
+    DEFAULT_HEURISTIC_WEIGHT,
     SQRT_2,
     SQRT_3,
     EPSILON,
@@ -32,11 +34,11 @@ class DLitePlanner(PathPlannerBase[NodeType]):
         width_m: float,
         length_m: float,
         height_m: float = 0.0,
-        resolution: float = 0.5,
+        resolution: float = A_STAR_DEFAULT_RESOLUTION,
         logger: Optional[logging.Logger] = None,
         grid_lock=None,
         use_octile_3d: bool = False,
-        heuristic_weight: float = 1.0,
+        heuristic_weight: float = DEFAULT_HEURISTIC_WEIGHT,
         enable_rust: bool = True,
     ):
         """初始化 D* Lite 规划器。"""

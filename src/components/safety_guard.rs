@@ -27,7 +27,10 @@ impl RustSafetyGuard {
     /// # Returns
     /// * `Option<(i32, i32, i32)>` - 找到的安全节点坐标，失败返回 None。
     #[staticmethod]
-    #[pyo3(signature = (start_node, ref_goal, map_manager, check_radius, check_z_margin, max_radius_grid, ignore_z))]
+    // 参数均为彼此独立的量（起终点、地图、半径、边距、策略开关），
+    // 打包成 struct 只会增加一层间接，不提升可读性。
+    #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (start_node, ref_goal, map_manager, check_radius, check_z_margin, max_radius_grid, ignore_z, search_3d))]
     pub fn smart_escape(
         start_node: (i32, i32, i32),
         ref_goal: (i32, i32, i32),
@@ -36,6 +39,7 @@ impl RustSafetyGuard {
         check_z_margin: f32,
         max_radius_grid: i32,
         ignore_z: bool,
+        search_3d: bool,
     ) -> Option<(i32, i32, i32)> {
         // 1. 快速检查原点
         // RustMapManager 内部没有缓存 Grid 数组，所以直接用 check_collision_raw 进行几何检测
@@ -50,7 +54,13 @@ impl RustSafetyGuard {
             start_node, max_radius_grid, map_manager.resolution_m
         );
 
-        let dims_are_3d = map_manager.layers > 1;
+        // 规划维度由调用方显式传入，不能从 map_manager.layers 推断：
+        // layers = ceil(height_m / resolution) 恒 > 1（默认 20/1.0 = 20），
+        // 于是 2.5D 定高巡航模式下也会做 3D 壳层搜索。那样的候选点包含
+        // (0, 0, ±r) 这类 XY 未移动、只抬高了 Z 的位置；当 ignore_z=false 时
+        // 它们因高度足够而通过碰撞检测被当作脱困点返回，Python 侧再把 z 截掉，
+        // 结果脱困点等于原点，起点仍在膨胀层内。
+        let dims_are_3d = search_3d;
 
         // 2. 同心壳层搜索 (Concentric Shell Search)
         for r in 1..=max_radius_grid {
@@ -115,9 +125,9 @@ impl RustSafetyGuard {
                 let best_node = candidates
                     .iter()
                     .min_by_key(|n| {
-                        let dx = n.x - ref_goal.0;
-                        let dy = n.y - ref_goal.1;
-                        let dz = n.z - ref_goal.2;
+                        let dx = n.row - ref_goal.0;
+                        let dy = n.col - ref_goal.1;
+                        let dz = n.layer - ref_goal.2;
                         dx * dx + dy * dy + dz * dz
                     })
                     .unwrap();
@@ -126,7 +136,7 @@ impl RustSafetyGuard {
                     "[Rust Safety] 脱困成功! 半径: {}, 新起点: {:?}",
                     r, best_node
                 );
-                return Some((best_node.x, best_node.y, best_node.z));
+                return Some((best_node.row, best_node.col, best_node.layer));
             }
         }
 

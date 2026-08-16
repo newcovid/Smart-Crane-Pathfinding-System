@@ -6,6 +6,8 @@ from typing import Tuple, List, Any, Optional, Union, TYPE_CHECKING
 from smart_crane.core.config import Settings
 from smart_crane.core.rust_bridge import RustBackend
 from smart_crane.core.constants import (
+    TIME_MS_MULTIPLIER,
+    TIME_FMT_PREC,
     SHAPE_CIRCLE,
     MIN_SAFE_HEIGHT_OFFSET,
     GRID_MARGIN_BUFFER,
@@ -182,7 +184,7 @@ class GridAdapter:
                     )
                     t1 = time.perf_counter()
                     self.logger.debug(
-                        f"[GridAdapter] Rust增量Diff计算完毕: {(t1-t0)*1000:.2f}ms"
+                        f"[GridAdapter] Rust增量Diff计算完毕: {(t1 - t0) * TIME_MS_MULTIPLIER:.{TIME_FMT_PREC}f}ms"
                     )
                     return changes
                 else:
@@ -243,7 +245,7 @@ class GridAdapter:
 
         t1 = time.perf_counter()
         self.logger.info(
-            f"[GridAdapter] Python增量Diff计算完毕: {(t1-t0)*1000:.2f}ms (Changes: {count})"
+            f"[GridAdapter] Python增量Diff计算完毕: {(t1 - t0) * TIME_MS_MULTIPLIER:.{TIME_FMT_PREC}f}ms (Changes: {count})"
         )
         return changes
 

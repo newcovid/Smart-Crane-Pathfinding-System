@@ -283,16 +283,21 @@ This is a **prototype** and has not run in production.
 The project was discontinued due to a change in business requirements; the three items
 above stop at interface definition.
 
-### Cross-engine behavioural differences
+### How equivalent the two engines are
 
-Not yet aligned; pull requests welcome:
+All of the following are enforced by tests under `tests/`:
 
-| Item | Current behaviour |
+| Item | Guarantee |
 |---|---|
-| Semantics of `z_m == 0` | Rust treats it as "unknown height" and substitutes `DEFAULT_Z_HIGH`; Python treats it as a literal zero height |
-| Dimension check in escape logic | Rust decides 3D from `layers > 1`, so it searches the Z axis even in 2.5D mode |
-| `nodes_expanded` | Rust A\* performs no stale-entry check, inflating the count; not comparable with Python (the paths themselves are verified equal by the equivalence tests) |
-| `replanning_count` | On the Rust side this is a cumulative `AtomicUsize` that does not reset on `initialize` |
+| C-space inflated grid | **Identical cell by cell** (at 0.5, 1.0 and 2.0 m resolutions) |
+| D\* Lite path | **Identical point by point** |
+| A\* path | Equal cost; the node sequence may differ (see below) |
+
+A\* is the only part without point-wise equality. The tie-break rule itself matches on
+both sides (compare `f`, then coordinates lexicographically); the divergence comes from
+float width: two `f` values 1e-8 apart tie under `f32` but not under `f64`, changing the
+pop order. Both paths are optimal, so Rust was not switched to `f64` — that would trade
+real performance for a property that does not affect correctness.
 
 ### Security
 
