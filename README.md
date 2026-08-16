@@ -135,29 +135,37 @@ Python 侧调用 `scipy.ndimage.distance_transform_edt` 配合形态学膨胀。
 计时窗口包含 `update_obstacles()`——一次环境变化的真实成本是
 "通知规划器 + 取出新路径"之和，只计后者会偏乐观约 8%。
 
-**Python 原生实现**（Python 3.14 / Windows x64 / 未启用 Rust）：
+数据来自 CI 的 `benchmark` job——**同一台 runner、同一次运行**内先跑纯 Python
+再构建 Rust 重跑，因此两列可以直接横向比较（ubuntu-latest / Python 3.12）。
 
-| 网格 | A\* 全量 | D\* Lite 增量 | 加速比 | 路径步数 |
-|---:|---:|---:|---:|---:|
-| 100×100 | 11.0 ms | 1.2 ms | **9×** | 114 |
-| 200×200 | 37.7 ms | 2.5 ms | **15×** | 226 |
-| 300×300 | 148.9 ms | 4.4 ms | **34×** | 351 |
-| 400×400 | 153.5 ms | 6.8 ms | **23×** | 443 |
+| 网格 | 引擎 | A\* 全量 | D\* Lite 增量 | 增量加速比 | 路径步数 |
+|---:|:---|---:|---:|---:|---:|
+| 100×100 | Python | 13.6 ms | 1.6 ms | 8× | 114 |
+| 100×100 | **Rust** | **1.1 ms** | **0.1 ms** | 18× | 114 |
+| 200×200 | Python | 52.2 ms | 3.3 ms | 16× | 226 |
+| 200×200 | **Rust** | **3.6 ms** | **0.1 ms** | 32× | 226 |
+| 300×300 | Python | 201.7 ms | 5.7 ms | 35× | 351 |
+| 300×300 | **Rust** | **15.4 ms** | **0.2 ms** | 88× | 351 |
 
-规模越大，增量重规划的优势越明显——这正是它在动态环境下的价值。
+三个结论：
 
-复现与双引擎对照：
+1. **D\* Lite 的增量优势随规模放大。** 300×300 上，改一个障碍物后重规划
+   只要全量搜索的 1/35（Python）到 1/88（Rust）。
+2. **Rust 核心带来约 13 倍的常数级加速。** A\* 全量在 300×300 上从 201.7 ms 降到 15.4 ms。
+3. **两个引擎的路径步数逐行相同**（114 / 226 / 351）。这不是巧合，
+   是 `TestEngineEquivalence` 在守护的不变量。
+
+两者叠加，300×300 的动态重规划从 201.7 ms（Python 全量）压到 0.2 ms（Rust 增量）。
+
+复现：
 
 ```bash
-python benchmarks/bench.py --sizes 100 200 300 400 --repeat 3
-python benchmarks/bench.py --engine both     # 同一次运行内跑完 Python 与 Rust
+python benchmarks/bench.py --sizes 100 200 300 --repeat 3
+python benchmarks/bench.py --engine both     # 同一次运行内跑完两个引擎
 ```
 
-> **Rust 与 Python 的横向比值本 README 不给。**
-> 作者本机没有 Rust 工具链，没实测过的数字不写。
-> CI 的 `benchmark` job 会在同一台 runner 上跑 `--engine both`，
-> 结果在 [Actions](https://github.com/newcovid/Smart-Crane-Pathfinding-System/actions) 的
-> job summary 里可查。
+最新数据见 [Actions](https://github.com/newcovid/Smart-Crane-Pathfinding-System/actions)
+的 job summary，或下载 `benchmark-results` artifact。
 
 ---
 
@@ -280,7 +288,7 @@ SECRET_KEY=<你的密钥> LOG_LEVEL=INFO python app.py
 |---|---|
 | `z_m == 0` 的语义 | Rust 当作"未知高度"取 `DEFAULT_Z_HIGH`，Python 当作真实的 0 高度 |
 | 智能脱困的维度判断 | Rust 用 `layers > 1` 判 3D，2.5D 模式下会多搜一层 Z |
-| `nodes_expanded` 统计 | Rust A\* 无 stale entry 检查，计数偏高，不可与 Python 横向比较 |
+| `nodes_expanded` 统计 | Rust A\* 无 stale entry 检查，计数偏高，不可与 Python 横向比较（路径本身已由等价性测试验证一致） |
 | `replanning_count` | Rust 侧是跨请求累计的 `AtomicUsize`，不随 `initialize` 归零 |
 
 ---
