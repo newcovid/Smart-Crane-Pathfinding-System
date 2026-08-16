@@ -86,6 +86,17 @@ maturin develop --release
 未构建扩展时系统自动使用纯 Python 实现，功能完整。
 编译产物不纳入版本控制——它与具体的 Python 小版本绑定，跨版本无法加载。
 
+> **Python 3.14 用户注意**：当前依赖的 PyO3 0.23 最高支持到 Python 3.13，
+> 直接构建会报 `the configured Python interpreter version (3.14) is newer than
+> PyO3's maximum supported version (3.13)`。临时方案是启用稳定 ABI 前向兼容：
+>
+> ```bash
+> PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release
+> ```
+>
+> 该方式已验证可正常构建并通过全部测试。升级到 PyO3 0.29 是更彻底的解法，
+> 但涉及跨 6 个小版本的 API 变更，尚未进行。
+
 ### 运行测试
 
 ```bash

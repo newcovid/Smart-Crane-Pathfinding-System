@@ -80,6 +80,18 @@ Without the extension the system falls back to the pure-Python implementation wi
 no loss of functionality. Build artifacts are not committed — they are bound to a
 specific Python minor version and will not load across versions.
 
+> **Note for Python 3.14 users**: the pinned PyO3 0.23 supports Python 3.13 at most,
+> so a direct build fails with `the configured Python interpreter version (3.14) is
+> newer than PyO3's maximum supported version (3.13)`. Work around it by enabling
+> stable-ABI forward compatibility:
+>
+> ```bash
+> PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release
+> ```
+>
+> This has been verified to build and pass the full test suite. Upgrading to PyO3 0.29
+> is the proper fix but spans six minor versions of API changes and has not been done yet.
+
 ### Tests
 
 ```bash
