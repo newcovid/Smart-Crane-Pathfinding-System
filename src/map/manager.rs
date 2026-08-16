@@ -27,6 +27,32 @@ pub struct RustMapManager {
     // 保持私有，通过方法操作
     static_obstacles: HashMap<String, Obstacle>,
     dynamic_obstacles: HashMap<String, Obstacle>,
+
+    // --- 静态层膨胀缓存 ---
+    //
+    // 膨胀对障碍物集合可分配：dist(A∪B) = min(dist(A), dist(B))，
+    // 故 inflate(A∪B) == inflate(A) OR inflate(B)。据此把静态部分的膨胀
+    // 结果缓存下来，动态障碍物只需在其副本上叠加，无需每次重算全图。
+    //
+    // 意义在于障碍物数量越过 OBSTACLE_COUNT_THRESHOLD 之后会切换到
+    // 复杂度 O(网格面积) 的全局 EDT：此时静态部分正是开销的主要来源，
+    // 而它在两次动态变更之间根本没有变化。
+    static_cache: Option<StaticGridCache>,
+}
+
+/// 静态障碍物膨胀结果的单条缓存。
+///
+/// 参数按千分位量化后比较，避免浮点直接判等。
+struct StaticGridCache {
+    xy_margin_q: i64,
+    z_margin_q: i64,
+    check_z_q: Option<i64>,
+    grid: Vec<Vec<u8>>,
+}
+
+#[inline]
+fn quantize(v: f32) -> i64 {
+    (v as f64 * 1000.0).round() as i64
 }
 
 #[pymethods]
@@ -53,6 +79,7 @@ impl RustMapManager {
             layers,
             static_obstacles: HashMap::new(),
             dynamic_obstacles: HashMap::new(),
+            static_cache: None,
         }
     }
 
@@ -69,11 +96,13 @@ impl RustMapManager {
             z_m: z,
         };
         self.static_obstacles.insert(oid.clone(), obs);
+        self.static_cache = None; // 静态层变了，缓存作废
         debug!("[RustMap] 更新静态障碍: {}", oid);
     }
 
     pub fn remove_static_obstacle(&mut self, oid: String) {
         if self.static_obstacles.remove(&oid).is_some() {
+            self.static_cache = None; // 静态层变了，缓存作废
             debug!("[RustMap] 移除静态障碍: {}", oid);
         }
     }
@@ -180,29 +209,73 @@ impl RustMapManager {
     /// `check_z` 默认为 `None`。
     #[pyo3(signature = (xy_margin, z_margin, check_z=None))]
     pub fn get_2d_projection_grid(
-        &self,
+        &mut self,
         xy_margin: f32,
         z_margin: f32,
         check_z: Option<f32>,
     ) -> Vec<Vec<u8>> {
-        // 收集所有障碍物的引用
-        let obstacles: Vec<&Obstacle> = self
-            .static_obstacles
-            .values()
-            .chain(self.dynamic_obstacles.values())
-            .collect();
+        let (xq, zq, cq) = (
+            quantize(xy_margin),
+            quantize(z_margin),
+            check_z.map(quantize),
+        );
 
-        // 委托给 GridFactory 处理
-        // 注意：GridFactory 保持原内部逻辑参数顺序，这里做适配
-        GridFactory::create_inflated_grid_2d(
+        // 1. 静态层：命中缓存则直接复用，否则只对静态障碍物做一次膨胀
+        let hit = matches!(
+            &self.static_cache,
+            Some(c) if c.xy_margin_q == xq && c.z_margin_q == zq && c.check_z_q == cq
+        );
+        if !hit {
+            let static_obs: Vec<&Obstacle> = self.static_obstacles.values().collect();
+            let grid = GridFactory::create_inflated_grid_2d(
+                self.rows,
+                self.cols,
+                self.resolution_m,
+                &static_obs,
+                xy_margin,
+                check_z,
+                z_margin,
+            );
+            debug!(
+                "[RustMap] 静态层膨胀已重算并缓存（{} 个静态障碍）",
+                static_obs.len()
+            );
+            self.static_cache = Some(StaticGridCache {
+                xy_margin_q: xq,
+                z_margin_q: zq,
+                check_z_q: cq,
+                grid,
+            });
+        }
+
+        let static_grid = &self.static_cache.as_ref().unwrap().grid;
+
+        // 无动态障碍物时，静态层就是最终结果
+        if self.dynamic_obstacles.is_empty() {
+            return static_grid.clone();
+        }
+
+        // 2. 动态层：单独膨胀后与静态层求并集
+        //    依据 inflate(A∪B) == inflate(A) OR inflate(B)。
+        //    动态障碍物通常只有个位数，走的是廉价的逐障碍绘制分支。
+        let dyn_obs: Vec<&Obstacle> = self.dynamic_obstacles.values().collect();
+        let dyn_grid = GridFactory::create_inflated_grid_2d(
             self.rows,
             self.cols,
             self.resolution_m,
-            &obstacles,
+            &dyn_obs,
             xy_margin,
             check_z,
             z_margin,
-        )
+        );
+
+        let mut out = static_grid.clone();
+        for (row_out, row_dyn) in out.iter_mut().zip(dyn_grid.iter()) {
+            for (cell, d) in row_out.iter_mut().zip(row_dyn.iter()) {
+                *cell |= *d;
+            }
+        }
+        out
     }
 
     /// 获取 3D 体素网格。

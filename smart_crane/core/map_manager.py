@@ -81,6 +81,12 @@ class WorkshopMapManager:
         self._inflated_grid_caches: Dict[Tuple, Grid2D] = {}
         self._3d_grid_caches: Dict[Tuple, Grid3D] = {}
 
+        # 静态层膨胀缓存。与上面的成品缓存分开失效：
+        # 动态障碍物变更只清成品缓存，静态层可继续复用。
+        # 依据是膨胀对集合可分配——dist(A∪B) = min(dist(A), dist(B))，
+        # 故 inflate(A∪B) == inflate(A) OR inflate(B)。
+        self._static_grid_caches: Dict[Tuple, Grid2D] = {}
+
         # Rust 核心集成
         self.rust_map = None
         if RustBackend.is_available():
@@ -114,11 +120,18 @@ class WorkshopMapManager:
                 "dynamic_obstacles": copy.deepcopy(self.dynamic_obstacles),
             }
 
-    def _invalidate_cache(self) -> None:
-        """清除网格缓存（当障碍物变动时调用）。"""
+    def _invalidate_cache(self, static_changed: bool = True) -> None:
+        """清空网格缓存。
+
+        Args:
+            static_changed: 静态障碍物是否发生变化。为 False 时保留静态层
+                膨胀缓存——动态障碍物变更不影响静态部分，而静态部分在障碍物
+                较多时正是膨胀开销的主要来源。
+        """
         self._inflated_grid_caches.clear()
         self._3d_grid_caches.clear()
-        # self.logger.debug("缓存已清除。") # 减少日志噪音
+        if static_changed:
+            self._static_grid_caches.clear()
 
     def world_to_grid(
         self, x_m: float, y_m: float, z_m: float = 0.0
@@ -206,7 +219,7 @@ class WorkshopMapManager:
             if self.rust_map:
                 self.rust_map.update_dynamic_obstacle(obs_id, x, y, w, h, z)
 
-            self._invalidate_cache()
+            self._invalidate_cache(static_changed=False)
 
     def remove_dynamic_obstacle(self, obs_id: str):
         """移除动态障碍物。"""
@@ -218,7 +231,7 @@ class WorkshopMapManager:
                 if self.rust_map:
                     self.rust_map.remove_dynamic_obstacle(obs_id)
 
-                self._invalidate_cache()
+                self._invalidate_cache(static_changed=False)
 
     def find_obstacle_near(self, x_m: float, y_m: float) -> Optional[Tuple[str, str]]:
         """查找指定坐标附近的障碍物。
@@ -354,24 +367,34 @@ class WorkshopMapManager:
                 self._inflated_grid_caches[key] = inflated
                 return inflated
 
-            # 2. Python 原生路径
-            base_grid = [[GRID_FREE for _ in range(self.cols)] for _ in range(self.rows)]
-            all_obs = list(self.static_obstacles.values()) + list(
-                self.dynamic_obstacles.values()
-            )
+            # 2. Python 原生路径：静态层缓存 + 动态层叠加
             z_threshold = None if check_z is None else (check_z - z_margin)
 
-            for o in all_obs:
-                obs_h = o.get("z_m", DEFAULT_Z_HIGH)
-                if z_threshold is None or obs_h > z_threshold:
-                    self._mark_obstacle_area(
-                        base_grid, o["x_m"], o["y_m"], o["w_m"], o["h_m"]
-                    )
+            static_grid = self._static_grid_caches.get(key)
+            if static_grid is None:
+                static_grid = self._inflate_subset(
+                    self.static_obstacles.values(), xy_margin, z_threshold
+                )
+                self._static_grid_caches[key] = static_grid
+                self.logger.debug(
+                    f"[MapManager] 静态层膨胀已重算并缓存"
+                    f"（{len(self.static_obstacles)} 个静态障碍）"
+                )
 
-            # 调用 GridFactory 进行膨胀计算
-            inflated = GridFactory.create_inflated_grid_2d(
-                base_grid, xy_margin, self.logger
-            )
+            if not self.dynamic_obstacles:
+                inflated = static_grid
+            else:
+                # 动态层不再走第二遍全图 EDT：那对个位数的障碍物是纯粹的浪费
+                # （实测 300x300 下一次 EDT 约 5.8ms，与合并计算的总成本相当，
+                #  拆分反而变慢）。改为在静态层副本上按几何直接绘制，
+                # 与 Rust 侧障碍物稀疏时选用的绘制分支同构。
+                inflated = [row[:] for row in static_grid]
+                for o in self.dynamic_obstacles.values():
+                    obs_h = o.get("z_m", DEFAULT_Z_HIGH)
+                    if z_threshold is None or obs_h > z_threshold:
+                        self._paint_inflated_obstacle(
+                            inflated, o["x_m"], o["y_m"], o["w_m"], o["h_m"], xy_margin
+                        )
 
             t_total = time.perf_counter()
             self.logger.info(
@@ -380,6 +403,74 @@ class WorkshopMapManager:
 
             self._inflated_grid_caches[key] = inflated
             return inflated
+
+    def _paint_inflated_obstacle(
+        self,
+        grid: Grid2D,
+        x_m: float,
+        y_m: float,
+        w_m: float,
+        h_m: float,
+        xy_margin: float,
+    ) -> None:
+        """就地绘制单个障碍物的膨胀区域，结果与 EDT 分支逐格一致。
+
+        关键在于距离的度量对象必须和 EDT 相同。EDT 作用于
+        ``_mark_obstacle_area`` 栅格化之后的种子格，量的是
+        **格心到最近种子格心** 的距离；而"格心到连续矩形"的距离总是更小，
+        因为栅格化会把部分覆盖的格子整格算作占据，相当于种子向外取整。
+        用后者会得到系统性偏小的膨胀层——即放宽安全边界。
+
+        对矩形种子盒 ``[r_s..r_e] x [c_s..c_e]``，该距离有闭式解::
+
+            dr = max(0, r_s - r, r - r_e)
+            dc = max(0, c_s - c, c - c_e)
+            占据  <=>  dr^2 + dc^2 <= (xy_margin + 0.5)^2
+
+        因此无需跑全图 EDT。扫描范围只是种子盒外扩 margin，
+        成本与障碍物尺寸相关、与地图面积无关——这正是它适合稀疏动态层的原因。
+        """
+        r_s, c_s, _ = self.world_to_grid(x_m, y_m)
+        r_e, c_e, _ = self.world_to_grid(x_m + w_m - MARK_OBS_EPS, y_m + h_m - MARK_OBS_EPS)
+        r_s, r_e = max(0, r_s), min(self.rows - 1, r_e)
+        c_s, c_e = max(0, c_s), min(self.cols - 1, c_e)
+        if r_s > r_e or c_s > c_e:
+            return
+
+        thresh = xy_margin + GRID_CENTER_OFFSET
+        thresh_sq = thresh * thresh
+        pad = int(math.ceil(thresh))
+
+        for r in range(max(0, r_s - pad), min(self.rows - 1, r_e + pad) + 1):
+            dr = max(0, r_s - r, r - r_e)
+            dr_sq = dr * dr
+            if dr_sq > thresh_sq:
+                continue
+            row = grid[r]
+            for c in range(max(0, c_s - pad), min(self.cols - 1, c_e + pad) + 1):
+                if row[c] == GRID_OCCUPIED:
+                    continue
+                dc = max(0, c_s - c, c - c_e)
+                if dr_sq + dc * dc <= thresh_sq:
+                    row[c] = GRID_OCCUPIED
+
+    def _inflate_subset(
+        self, obstacles, xy_margin: float, z_threshold: Optional[float]
+    ) -> Grid2D:
+        """对给定的障碍物子集做一次 C-Space 膨胀。
+
+        拆成子集分别膨胀再求并集是合法的：欧氏距离变换满足
+        ``dist(A∪B) = min(dist(A), dist(B))``，因此
+        ``dist(A∪B) ≤ m`` 等价于 ``dist(A) ≤ m 或 dist(B) ≤ m``。
+        """
+        base_grid = [[GRID_FREE for _ in range(self.cols)] for _ in range(self.rows)]
+        for o in obstacles:
+            obs_h = o.get("z_m", DEFAULT_Z_HIGH)
+            if z_threshold is None or obs_h > z_threshold:
+                self._mark_obstacle_area(
+                    base_grid, o["x_m"], o["y_m"], o["w_m"], o["h_m"]
+                )
+        return GridFactory.create_inflated_grid_2d(base_grid, xy_margin, self.logger)
 
     def get_3d_voxel_grid(
         self,

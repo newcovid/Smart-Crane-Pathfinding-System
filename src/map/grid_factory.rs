@@ -79,14 +79,11 @@ impl GridFactory {
 
         // `xy_margin` 的单位是【网格数】，与 Python 侧 grid_adapter 的
         // `xy_margin = radius_m / resolution_m` 及 grid_factory.py 的文档一致。
-        // 此处的距离计算在物理米下进行，所以先换算成米；再补 0.5 格的离散补偿，
-        // 与 Python 的 `dist_map <= xy_margin + 0.5` 和下面 EDT 分支的判据对齐。
-        // （旧代码把 xy_margin 当米用，分辨率恰为 1.0 m 时两者数值相同，
-        //   所以一直没暴露；分辨率 0.5 m 时膨胀量翻倍，2.0 m 时只剩一半——
-        //   后者是往不安全的方向错。）
-        let margin_m = (xy_margin + 0.5) * resolution_m;
-        let xy_margin_sq = margin_m.powi(2);
-        let margin_grid_cells = xy_margin.ceil() as i32 + 1;
+        // 距离判据全程在格单位下进行，+0.5 是离散化补偿，
+        // 与 EDT 分支的 `dist <= xy_margin + 0.5` 完全对齐。
+        let thresh_cells = xy_margin + 0.5;
+        let thresh_cells_sq = thresh_cells * thresh_cells;
+        let margin_grid_cells = thresh_cells.ceil() as i32;
 
         let threshold = xy_margin - 0.5;
         if threshold >= 0.0 {
@@ -127,12 +124,18 @@ impl GridFactory {
                     if grid[r as usize][c as usize] == 1 {
                         continue;
                     }
-                    let px = (c as f32 + 0.5) * resolution_m;
-                    let py = (r as f32 + 0.5) * resolution_m;
-                    let closest_x = px.clamp(o.x_m, o.x_m + o.w_m);
-                    let closest_y = py.clamp(o.y_m, o.y_m + o.h_m);
-                    let dist_sq = (px - closest_x).powi(2) + (py - closest_y).powi(2);
-                    if dist_sq <= xy_margin_sq {
+                    // 距离必须量到【栅格化后的种子格】，而不是连续矩形。
+                    // EDT 分支作用于栅格化结果，部分覆盖的格子会被整格算作占据，
+                    // 相当于种子向外取整；若这里改量连续矩形，距离总是偏小，
+                    // 得到的膨胀层比 EDT 分支更窄——即放宽安全边界。
+                    // 两个分支必须给出同一结果，否则障碍物数跨过
+                    // OBSTACLE_COUNT_THRESHOLD 时膨胀层会突变。
+                    //
+                    // 对矩形种子盒有闭式解：
+                    //   dr = max(0, r_s - r, r - r_e), dc = max(0, c_s - c, c - c_e)
+                    let dr = (r_s - r).max(r - r_e).max(0) as f32;
+                    let dc = (c_s - c).max(c - c_e).max(0) as f32;
+                    if dr * dr + dc * dc <= thresh_cells_sq {
                         grid[r as usize][c as usize] = 1;
                     }
                 }

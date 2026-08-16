@@ -148,6 +148,40 @@ side is a hand-written two-pass distance transform with a 1-D parabolic lower en
 (`src/map/grid_factory.rs`), while Python uses
 `scipy.ndimage.distance_transform_edt` with morphological dilation.
 
+Both branches measure the distance from a cell centre to the nearest **rasterised seed
+cell** centre, with the same predicate `dist <= xy_margin + 0.5`. Keeping them aligned
+matters: measuring to the continuous rectangle instead yields systematically smaller
+distances, so the inflation layer would shrink the moment the obstacle count crosses
+the threshold.
+
+### Static layer cache
+
+The static/dynamic split is not merely cosmetic — it determines which work can be reused.
+
+Inflation distributes over the obstacle set: `dist(A∪B) = min(dist(A), dist(B))`, hence
+`inflate(A∪B) = inflate(A) OR inflate(B)`. The inflated static layer is therefore cached,
+and dynamic obstacles are painted onto a copy of it rather than triggering a full
+recomputation. Dynamic obstacles are typically few, so they take the painting branch
+whose cost is independent of map area.
+
+This matters because above the density threshold the system switches to a global EDT with
+`O(grid area)` complexity — and the static portion, which dominates that cost, does not
+change between dynamic updates. Time to fetch the grid after a single dynamic obstacle
+change (median of 12):
+
+| Grid | Static obstacles | Rust | Python |
+|---:|---:|---:|---:|
+| 200×200 | 40 | 0.09 → 0.11 ms | 2.81 → **0.06 ms** |
+| 300×300 | 80 | 4.19 → **0.18 ms** | 6.91 → **0.12 ms** |
+| 400×400 | 120 | 8.06 → **0.30 ms** | 12.58 → **0.13 ms** |
+
+Before this change, grid regeneration at 300×300 (4.19 ms) cost 20× the D\* Lite
+incremental replan itself (0.2 ms).
+
+`tests/test_grid.py` asserts the grid is **identical cell by cell** with and without the
+split. The cache must be a pure performance optimisation: any cell flipping from occupied
+to free would mean the safety margin had been relaxed.
+
 ### Dual engine and graceful degradation
 
 `smart_crane/core/rust_bridge.py` is the single gateway to the Rust extension and
@@ -248,25 +282,6 @@ This is a **prototype** and has not run in production.
 
 The project was discontinued due to a change in business requirements; the three items
 above stop at interface definition.
-
-### Static and dynamic obstacles are currently equivalent
-
-The two categories live in separate collections (`static_obstacles` /
-`dynamic_obstacles` in Python, two `HashMap`s in Rust), but they are merged into a
-single list before planning:
-
-```python
-all_obs = list(self.static_obstacles.values()) + list(self.dynamic_obstacles.values())
-```
-
-The `Obstacle` struct carries no discriminating field either; inflation, collision
-checking and search treat both identically. The only present difference is the fill
-colour in the 2D canvas.
-
-The distinction ought to matter: static obstacles could be baked into a base grid once,
-with dynamic ones overlaid on top and triggering only incremental updates — precisely
-what D\* Lite is for. The current implementation rebuilds everything from a merged list
-on each change, so the reusability of the static portion goes unused.
 
 ### Cross-engine behavioural differences
 

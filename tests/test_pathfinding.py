@@ -267,20 +267,18 @@ class TestEngineEquivalence(unittest.TestCase):
                     msg=f"{size}x{size} 上两引擎 D* Lite 代价不一致",
                 )
 
-    # 两引擎的膨胀格数允许的相对偏差上限。
-    # 这里刻意不要求逐格相同：三套实现的离散化方式本就不同——
-    # Python 用 SciPy 的 EDT（格心到格心的距离），
-    # Rust 密集分支是手写 EDT，稀疏分支是"格心到障碍矩形"的连续距离。
-    # 单位换算错误会造成 2 倍或 0.5 倍的偏差，远超此阈值，仍能被抓住。
-    INFLATION_TOLERANCE = 0.20
+    def test_inflation_matches_exactly(self):
+        """C-Space 膨胀：两个引擎必须给出逐格相同的膨胀层。
 
-    def test_inflation_is_consistent_and_never_less_safe(self):
-        """C-Space 膨胀：Rust 不得比 Python 更宽松，且偏差需在容差内。
+        此前这里只能断言"Rust 不比 Python 宽松，且偏差 <= 20%"，
+        因为三套实现的离散化方式不同：Python 用 SciPy 的 EDT，
+        Rust 密集分支是手写 EDT，稀疏分支量的是到连续矩形的距离。
+        把稀疏分支也改为量到栅格化种子格之后，三者已完全对齐，
+        断言随之收紧为精确相等。
 
         回归用例：Rust 侧曾把 `xy_margin`（单位为网格数）当作米使用，
         分辨率恰为 1.0 m 时两者数值相同因而一直没暴露；
-        0.5 m 时膨胀量翻倍，2.0 m 时只剩一半——后者是往不安全方向错，
-        由下面第一条断言拦截。
+        0.5 m 时膨胀量翻倍，2.0 m 时只剩一半——后者是往不安全方向错。
         """
         from smart_crane.core.map_manager import WorkshopMapManager
 
@@ -307,11 +305,11 @@ class TestEngineEquivalence(unittest.TestCase):
                     f"分辨率 {res} m：Rust 的膨胀比 Python 更宽松 "
                     f"(Rust={rs_occ} < Python={py_occ})，这是往不安全方向的偏差",
                 )
-                self.assertLessEqual(
-                    (rs_occ - py_occ) / max(py_occ, 1),
-                    self.INFLATION_TOLERANCE,
-                    f"分辨率 {res} m（膨胀 {margin_cells} 格）下两引擎偏差过大 "
-                    f"(Python={py_occ}, Rust={rs_occ})，疑似单位换算错误",
+                self.assertEqual(
+                    rs_occ,
+                    py_occ,
+                    f"分辨率 {res} m（膨胀 {margin_cells} 格）下两引擎占据格数不同 "
+                    f"(Python={py_occ}, Rust={rs_occ})",
                 )
 
 
