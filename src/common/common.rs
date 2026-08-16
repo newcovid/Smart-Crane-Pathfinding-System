@@ -62,6 +62,31 @@ impl FlatGrid {
         }
         !self.is_obstacle_unsafe(n)
     }
+
+    /// 写入单个栅格的占据状态。越界为 no-op，返回是否实际发生了改变。
+    ///
+    /// 增量更新必须能改写自身持有的网格：本结构体在构造时从 Python 侧
+    /// **拷贝**了数据，不与调用方共享内存。若只更新 g/rhs 而不同步网格，
+    /// 后续的 `is_obstacle_unsafe` 与梯度回溯都会基于陈旧数据，
+    /// 从而给出一条穿过障碍物的路径。
+    #[inline]
+    pub fn set_occupancy(&mut self, n: &Node, occupied: bool) -> bool {
+        if !self.is_valid(n) {
+            return false;
+        }
+        let idx = (n.x as usize * self.cols as usize * self.layers as usize)
+            + (n.y as usize * self.layers as usize)
+            + (n.z as usize);
+        if idx >= self.data.len() {
+            return false;
+        }
+        let val = u8::from(occupied);
+        if self.data[idx] == val {
+            return false;
+        }
+        self.data[idx] = val;
+        true
+    }
 }
 
 /// 解析 Python 传入的网格对象。

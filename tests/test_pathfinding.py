@@ -267,19 +267,27 @@ class TestEngineEquivalence(unittest.TestCase):
                     msg=f"{size}x{size} 上两引擎 D* Lite 代价不一致",
                 )
 
-    def test_inflation_matches_across_resolutions(self):
-        """C-Space 膨胀在非 1.0 分辨率下也必须一致。
+    # 两引擎的膨胀格数允许的相对偏差上限。
+    # 这里刻意不要求逐格相同：三套实现的离散化方式本就不同——
+    # Python 用 SciPy 的 EDT（格心到格心的距离），
+    # Rust 密集分支是手写 EDT，稀疏分支是"格心到障碍矩形"的连续距离。
+    # 单位换算错误会造成 2 倍或 0.5 倍的偏差，远超此阈值，仍能被抓住。
+    INFLATION_TOLERANCE = 0.20
+
+    def test_inflation_is_consistent_and_never_less_safe(self):
+        """C-Space 膨胀：Rust 不得比 Python 更宽松，且偏差需在容差内。
 
         回归用例：Rust 侧曾把 `xy_margin`（单位为网格数）当作米使用，
         分辨率恰为 1.0 m 时两者数值相同因而一直没暴露；
-        0.5 m 时膨胀量翻倍，2.0 m 时只剩一半——后者是往不安全方向错。
+        0.5 m 时膨胀量翻倍，2.0 m 时只剩一半——后者是往不安全方向错，
+        由下面第一条断言拦截。
         """
         from smart_crane.core.map_manager import WorkshopMapManager
 
         for res in (0.5, 1.0, 2.0):
             with self.subTest(resolution=res):
-                # xy_margin 的单位是【网格数】，所以固定 1.0 m 的物理半径，
-                # 换算成不同分辨率下的格数——两引擎膨胀出的占据格数应当一致。
+                # xy_margin 的单位是【网格数】，固定 1.0 m 的物理膨胀半径，
+                # 换算成该分辨率下的格数。
                 margin_cells = 1.0 / res
 
                 def build():
@@ -290,16 +298,20 @@ class TestEngineEquivalence(unittest.TestCase):
                     return mm.get_2d_projection_grid(xy_margin=margin_cells)
 
                 with RustBackend.disabled():
-                    py_grid = build()
-                rs_grid = build()
+                    py_occ = sum(sum(row) for row in build())
+                rs_occ = sum(sum(row) for row in build())
 
-                py_occ = sum(sum(row) for row in py_grid)
-                rs_occ = sum(sum(row) for row in rs_grid)
-                self.assertEqual(
-                    py_occ,
+                self.assertGreaterEqual(
                     rs_occ,
-                    f"分辨率 {res} m（膨胀 {margin_cells} 格）下两引擎的占据格数不同 "
-                    f"(Python={py_occ}, Rust={rs_occ})",
+                    py_occ,
+                    f"分辨率 {res} m：Rust 的膨胀比 Python 更宽松 "
+                    f"(Rust={rs_occ} < Python={py_occ})，这是往不安全方向的偏差",
+                )
+                self.assertLessEqual(
+                    (rs_occ - py_occ) / max(py_occ, 1),
+                    self.INFLATION_TOLERANCE,
+                    f"分辨率 {res} m（膨胀 {margin_cells} 格）下两引擎偏差过大 "
+                    f"(Python={py_occ}, Rust={rs_occ})，疑似单位换算错误",
                 )
 
 

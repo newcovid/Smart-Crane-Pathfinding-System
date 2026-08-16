@@ -212,11 +212,20 @@ impl RustDLitePlanner {
 
         debug!("[Rust D*] 处理 {} 个增量更新...", changes.len());
 
-        for (r, c, l, _val) in changes {
+        for (r, c, l, val) in changes {
             let u = Node::new(r, c, l);
             if !self.grid.is_valid(&u) {
+                warn!("[Rust D*] 忽略越界的变更点 ({}, {}, {})", r, c, l);
                 continue;
             }
+
+            // 先把新状态写进自己持有的网格，再重算代价。
+            // 本规划器在构造时拷贝了网格，不与 Python 侧共享内存；
+            // 早期实现把入参里的新状态丢弃（`_val`），只更新 g/rhs，
+            // 导致 is_obstacle_unsafe 和梯度回溯一直读的是旧网格，
+            // 最终可能返回一条穿过障碍物的路径。
+            self.grid.set_occupancy(&u, val == 1);
+
             // 障碍物状态改变，影响该节点及其邻居的代价值
             self.update_vertex(&u);
             for (neighbor, _) in self.get_neighbors(&u) {
