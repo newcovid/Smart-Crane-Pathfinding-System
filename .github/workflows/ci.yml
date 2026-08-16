@@ -24,9 +24,9 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -52,9 +52,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -79,7 +79,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt maturin
-          maturin develop --release
+          # 不能用 `maturin develop`：它要求存在 virtualenv，CI 上是系统 Python。
+          maturin build --release --out dist
+          pip install --no-index --find-links dist smart_crane_core
 
       - name: 确认扩展已加载（不允许静默降级）
         run: |
@@ -94,9 +96,9 @@ jobs:
     name: 基准对照 (Python vs Rust)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -125,7 +127,8 @@ jobs:
 
       - name: 基准 — Rust 加速
         run: |
-          maturin develop --release
+          maturin build --release --out dist
+          pip install --no-index --find-links dist smart_crane_core
           {
             echo '<details open><summary>Rust 加速</summary>'
             echo
