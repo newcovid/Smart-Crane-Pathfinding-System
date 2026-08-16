@@ -1,5 +1,8 @@
 use crate::common::{parse_python_grid, FlatGrid, Node};
 // 引入公共常量
+use crate::common::constants::{
+    DSLITE_COST_THRESHOLD_MULTIPLIER, DSLITE_DEFAULT_MAX_NODES, DSLITE_MAX_NODES_MULTIPLIER,
+};
 use crate::common::{COST_1, COST_2, COST_3, EPSILON, FLOAT_TOLERANCE, INF};
 use ordered_float::NotNan;
 use pyo3::prelude::*;
@@ -114,8 +117,11 @@ impl RustDLitePlanner {
         debug!("[Rust D*] 正在初始化...");
         let flat_grid = parse_python_grid(grid)?;
         let total_voxels = (flat_grid.rows * flat_grid.cols * flat_grid.layers.max(1)) as usize;
-        let max_nodes = std::cmp::max(5000, total_voxels * 5);
-        let cost_thresh = (total_voxels as f32) * 1.74 * 10.0;
+        let max_nodes = std::cmp::max(
+            DSLITE_DEFAULT_MAX_NODES,
+            total_voxels * DSLITE_MAX_NODES_MULTIPLIER,
+        );
+        let cost_thresh = (total_voxels as f32) * DSLITE_COST_THRESHOLD_MULTIPLIER;
 
         info!(
             "[Rust D*] 初始化完毕. Grid: {}x{}x{}, MaxNodes: {}",
@@ -139,7 +145,7 @@ impl RustDLitePlanner {
             goal_node: None,
             last_start_node: None,
             max_nodes_expanded: max_nodes,
-            _cost_threshold: cost_thresh.max(100000.0),
+            _cost_threshold: cost_thresh,
             nodes_expanded_stat: AtomicUsize::new(0),
             replanning_count_stat: AtomicUsize::new(0),
         })

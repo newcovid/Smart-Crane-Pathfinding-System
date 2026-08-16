@@ -178,7 +178,7 @@
                                     <div class="w-9 h-5 bg-slate-200 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all after:shadow-sm peer-checked:bg-amber-500 peer-checked:after:border-white transition-colors shadow-inner"></div>
                                 </label>
                             </div>
-                            <p class="text-[10px] text-slate-400 leading-tight">启用 Rust 编译层加速计算，性能提升 10-50 倍。</p>
+                            <p class="text-[10px] text-slate-400 leading-tight">启用 Rust 原生加速核心。关闭后回落到功能等价的纯 Python 实现。</p>
                         </div>
 
                         <select-input label="规划核心" v-model="settings.PLANNER_ALGORITHM" :options="[{label: 'A* (全局最优)', value: 'astar'}, {label: 'D* Lite (动态增量)', value: 'dslite'}]"></select-input>

@@ -213,7 +213,8 @@ class CraneService:
                     old_static = self.map_mgr.static_obstacles.copy()
                     old_dynamic = self.map_mgr.dynamic_obstacles.copy()
 
-                # 重建 MapManager
+                # 重建 MapManager（沿用同一把锁，见下方 adopt_lock）
+                previous_lock = self.map_mgr.lock
                 self.map_mgr = WorkshopMapManager(
                     width_m=self.settings.map.width_m,
                     length_m=self.settings.map.length_m,
@@ -235,10 +236,14 @@ class CraneService:
 
                 # 重建 Planner 并重新绑定
                 self.planner.map_mgr = self.map_mgr
-                self.planner.grid_lock = self.map_mgr.lock
+                # 注意：不能把 planner 的锁替换成新 MapManager 的锁。
+                # 若此刻另一个事件正持有旧锁在 plan() 中执行，替换之后
+                # 新请求拿到的是另一把锁，互斥即告失效。
+                # 这里改为把旧锁沿用到新的 MapManager 上，全程只有一把锁。
+                self.map_mgr.adopt_lock(previous_lock)
                 self.planner.grid_adapter.map_mgr = self.map_mgr  # 关键：更新适配器引用
                 self.planner.safety_guard.map_mgr = self.map_mgr  # 关键：更新守卫引用
-                self.planner.initialize_planner(force_rebuild=True)
+                self.planner.initialize_planner()
 
                 self.logger.info("系统重构完成。")
             else:

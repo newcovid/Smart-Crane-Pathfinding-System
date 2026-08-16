@@ -33,3 +33,23 @@ pub const DEFAULT_Z_HIGH: f32 = 100.0;
 /// 否则使用基于几何遍历的“绘制”算法。
 /// EDT 复杂度为 O(GridSize)，绘制算法复杂度为 O(ObsCount * ObsSize)。
 pub const OBSTACLE_COUNT_THRESHOLD: usize = 50;
+
+// =============================================================================
+// D* Lite 搜索限额
+//
+// 三者必须与 Python 端 constants.py 的同名常量保持一致，否则同一张地图上
+// 两个引擎的熔断时机不同：熔断会触发全量重置，进而改变 nodes_expanded
+// 与耗时统计，使双引擎的性能数据不可比。
+// =============================================================================
+
+/// 最大扩展节点数的下限。
+pub const DSLITE_DEFAULT_MAX_NODES: usize = 5000;
+
+/// 最大扩展节点数 = 网格总数 x 本系数（取与下限的较大者）。
+pub const DSLITE_MAX_NODES_MULTIPLIER: usize = 5;
+
+/// 无解判定的代价阈值 = 网格总数 x 本系数。
+///
+/// 早期 Rust 实现写的是 `total * 1.74 * 10.0` 再取 `max(100_000)`，
+/// 与 Python 的 `total * 100.0` 相差数倍，且多了一个 Python 侧没有的下限。
+pub const DSLITE_COST_THRESHOLD_MULTIPLIER: f32 = 100.0;

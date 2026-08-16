@@ -342,7 +342,12 @@ impl RustAStarPlanner {
                         if dx != 0 && dy != 0 {
                             let c1 = Node::new(node.x + dx, node.y, node.z);
                             let c2 = Node::new(node.x, node.y + dy, node.z);
-                            if !self.grid.is_safe(&c1) || !self.grid.is_safe(&c2) {
+                            // 与 Python 侧 `is_obstacle(...) or is_obstacle(...)` 同义：
+                            // is_obstacle_unsafe 把越界一律视为障碍，is_safe 是它的否定，
+                            // 两侧对边界的处理已一致。
+                            if self.grid.is_obstacle_unsafe(&c1)
+                                || self.grid.is_obstacle_unsafe(&c2)
+                            {
                                 continue;
                             }
                         }

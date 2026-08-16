@@ -120,6 +120,21 @@ class WorkshopMapManager:
                 "dynamic_obstacles": copy.deepcopy(self.dynamic_obstacles),
             }
 
+    def adopt_lock(self, lock: threading.RLock) -> None:
+        """改用外部传入的锁。
+
+        仅供地图重建时使用：重建会产生新的 MapManager 实例，若同时换掉锁对象，
+        正持有旧锁的线程与拿到新锁的线程之间就不再互斥。沿用同一把锁可避免
+        这个窗口。
+
+        必须在新实例被其他线程访问之前调用。
+        """
+        self._lock = lock
+
+    def invalidate_cache(self) -> None:
+        """公开的缓存失效入口，供上层在持有锁时调用。"""
+        self._invalidate_cache()
+
     def _invalidate_cache(self, static_changed: bool = True) -> None:
         """清空网格缓存。
 

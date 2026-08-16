@@ -197,7 +197,12 @@ class BezierSmoothProcessor(PathPostProcessor):
         q2 = tuple(p1[d] + (p2[d] - p1[d]) * s for d in range(dims))
 
         points = []
-        for i in range(1, self.num_segments + 1):
+        # 必须从 i=0（即 t=0 的 q0）开始输出。
+        # _check_curve_safety 是从 t=0 起做碰撞检查的，若这里跳过 q0，
+        # 实际路径就变成"上一点 → curve(1/n)"这条弦——它比校验过的
+        # "q0 → curve(1/n)"更贴近拐角内侧，且从未被任何检查覆盖。
+        # q0 位于 p0→p1 线段上，与上一段的终点不重合，不会产生重复点。
+        for i in range(0, self.num_segments + 1):
             t = i / self.num_segments
             pt_list = []
             for d in range(dims):

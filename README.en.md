@@ -350,6 +350,17 @@ If the package eagerly imported `crane_service`, that would load
 `pathfinding.base`. Lazy imports keep the public API unchanged while allowing any
 submodule to serve as an entry point.
 
+### The Bézier curve must emit its start point
+
+Corner smoothing produces a quadratic Bézier starting at `q0`, a point on the
+`p0→p1` segment. The collision check runs from `t=0`, so the output must start there too.
+
+An earlier implementation emitted from `t=1/n`, on the assumption that `q0` coincides
+with the end of the previous segment. It does not: `q0` sits at a smoothing-factor
+distance from `p1` and differs from the previous corner's `q2`. Skipping it made the
+actual path traverse the chord "previous point → curve(1/n)", which hugs the inside of
+the corner more tightly than the validated "`q0` → curve(1/n)" and was never checked.
+
 ### Others
 
 - **Shared lock**: the `MapManager` `RLock` is injected into the planner so map data and

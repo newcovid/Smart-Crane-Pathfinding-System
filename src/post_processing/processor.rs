@@ -1,7 +1,6 @@
 use crate::map::RustMapManager;
 use crate::post_processing::bezier::BezierSmoother;
 use crate::post_processing::greedy::GreedyOptimizer;
-use log::info;
 use pyo3::prelude::*;
 
 /// Rust 实现的高性能后处理器工厂。
@@ -86,12 +85,5 @@ impl RustPostProcessor {
             grace_end,
         );
         Ok(smoothed)
-    }
-
-    /// 简单的测试方法，用于验证绑定是否成功
-    #[staticmethod]
-    pub fn ping() -> String {
-        info!("[RustPostProcessor] Pong!");
-        "Pong".to_string()
     }
 }

@@ -85,13 +85,12 @@ class TrajectoryPlanner:
         self.initialize_planner()
         self.logger.info("轨迹规划器启动就绪。")
 
-    def initialize_planner(self, force_rebuild: bool = False):
+    def initialize_planner(self):
         """初始化或重建规划器实例。
 
         通常在系统启动或配置发生重大变更（如切换算法、改变地图尺寸）时调用。
 
         Args:
-            force_rebuild: (保留参数) 强制重建标志。
         """
         t_start = time.perf_counter()
 
@@ -132,8 +131,10 @@ class TrajectoryPlanner:
         目前采取全量刷新策略：清除缓存并重建规划器。
         """
         self.logger.info("正在应用新配置并重构规划器...")
-        self.map_mgr._invalidate_cache()
-        self.initialize_planner(force_rebuild=True)
+        # 在锁内调用公开接口：此前是锁外调用，且跨类访问了私有方法。
+        with self.grid_lock:
+            self.map_mgr.invalidate_cache()
+        self.initialize_planner()
 
     def handle_obstacle_update(
         self, x: float, y: float, w: float, h: float, z: float, is_add: bool

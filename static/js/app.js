@@ -195,7 +195,15 @@ const app = createApp({
             state.connection.statusText = '离线';
             notify('error', '与服务器的连接已断开。', '连接丢失');
         });
-        socket.on('pong', (ms) => { state.connection.latency = ms; });
+        // Socket.IO v4 不再向应用层派发 'pong'（心跳在传输层内部完成），
+        // 原先监听它的写法使界面上的延迟恒为 0。改为主动测量往返时延。
+        setInterval(() => {
+            if (!socket.connected) return;
+            const t0 = performance.now();
+            socket.emit('latency_probe', null, () => {
+                state.connection.latency = Math.round(performance.now() - t0);
+            });
+        }, 3000);
 
         socket.on('update_map_state', (d) => {
             try {

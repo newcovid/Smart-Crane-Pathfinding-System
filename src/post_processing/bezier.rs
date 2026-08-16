@@ -197,11 +197,17 @@ impl BezierSmoother {
             p1.2 + (p2.2 - p1.2) * s,
         );
 
-        let mut points = Vec::with_capacity(segments);
+        let mut points = Vec::with_capacity(segments + 1);
 
-        // 插值生成中间点 (不包含起点 q0，包含终点 q2，实际上我们生成的是替换 P1 的那一段弧线)
-        // 注意：Python版实现是 1..=segments，即不包含 q0 (它是上一段的终点或 P0-P1 上的点)，避免重复
-        for i in 1..=segments {
+        // 从 i=0（t=0，即 q0）开始输出，包含终点 q2。
+        //
+        // 早期实现从 1..=segments 起，理由是"q0 是上一段的终点，避免重复"——
+        // 但这不成立：q0 位于 P0→P1 线段上、距 P1 为 s 的位置，与上一段的
+        // 终点（上一拐角的 q2）并不重合。跳过它会让实际路径变成
+        // "上一点 → curve(1/n)"这条弦，它比碰撞检查覆盖的
+        // "q0 → curve(1/n)"更贴近拐角内侧，且从未被验证。
+        // 碰撞检查是从 t=0 起做的，输出必须与之一致。
+        for i in 0..=segments {
             let t = i as f32 / segments as f32;
             let t_sq = t * t;
             let inv_t = 1.0 - t;
