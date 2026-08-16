@@ -12,10 +12,6 @@
 # 4. 实例化核心业务服务
 # ==============================================================================
 
-import eventlet
-
-eventlet.monkey_patch()  # 必须在导入其他库之前打补丁，以支持协程
-
 import os
 import queue
 import atexit
@@ -139,7 +135,21 @@ class SocketIOLogHandler(logging.Handler):
 app: Flask = Flask(__name__, template_folder="templates")
 app.config["SECRET_KEY"] = settings.app.secret_key
 
-socketio: SocketIO = SocketIO(app, async_mode="eventlet", cors_allowed_origins="*")
+# async_mode="threading" —— 不做 monkey-patch 的标准线程模型。
+#
+# 早期版本用的是 eventlet，但它已进入 deprecated / 维护模式，Flask-SocketIO
+# 官方也不再建议新项目采用；它在较新的 Python 上安装与运行都不稳定。
+# 本项目只把它当作 Socket.IO 的传输层，没有用到任何绿色线程或协程池，
+# 因此可以直接移除。
+#
+# 移除 monkey_patch() 还顺带修正了一处隐患：它会把 setup_async_logging()
+# 里的 QueueListener 真线程替换成绿色线程，使"日志 I/O 不阻塞主循环"的
+# 前提不再成立。
+#
+# 并发能力：threading 模式配合 simple-websocket 提供真正的 WebSocket，
+# 对本项目（单操作员驱动一个浏览器）绰绰有余。若需高并发部署，
+# 换用 gevent 即可，见 README 的部署一节。
+socketio: SocketIO = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
 
 
 def setup_async_logging():

@@ -1,6 +1,6 @@
 flask
 flask-socketio
-eventlet
+simple-websocket   # threading 模式下提供真正的 WebSocket 传输（否则退化为长轮询）
 python-dotenv
 numpy
 scipy

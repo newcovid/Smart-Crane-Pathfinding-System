@@ -39,7 +39,7 @@
 |---|---|
 | Flask | BSD-3-Clause |
 | Flask-SocketIO | MIT |
-| eventlet | MIT |
+| simple-websocket | MIT |
 | python-dotenv | BSD-3-Clause |
 | NumPy | BSD-3-Clause |
 | SciPy | BSD-3-Clause |
