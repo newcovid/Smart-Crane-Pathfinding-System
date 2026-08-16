@@ -1,4 +1,4 @@
-/# Byte-compiled / optimized / DLL files
+# Byte-compiled / optimized / DLL files
 __pycache__/
 **/__pycache__/
 *.py[cod]
@@ -104,5 +104,9 @@ target/**
 
 # Dependency/temp files produced during Rust builds
 *.d
-# Allow root smart_crane_core.pyd to be tracked in git
-!/smart_crane_core.pyd
+
+# 编译产物一律不入库。Rust 扩展请用 `maturin develop --release` 本地构建，
+# 或从 Releases 下载对应 Python 版本的 wheel。
+# （曾经用 `!/smart_crane_core.pyd` 把编译好的扩展提交进仓库，
+#   结果是它只在编译时那个 Python 小版本下可导入，换个版本就报
+#   "DLL load failed"，反而比没有更糟。）
