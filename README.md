@@ -86,17 +86,6 @@ maturin develop --release
 未构建扩展时系统自动使用纯 Python 实现，功能完整。
 编译产物不纳入版本控制——它与具体的 Python 小版本绑定，跨版本无法加载。
 
-> **Python 3.14 用户注意**：当前依赖的 PyO3 0.23 最高支持到 Python 3.13，
-> 直接构建会报 `the configured Python interpreter version (3.14) is newer than
-> PyO3's maximum supported version (3.13)`。临时方案是启用稳定 ABI 前向兼容：
->
-> ```bash
-> PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 maturin develop --release
-> ```
->
-> 该方式已验证可正常构建并通过全部测试。升级到 PyO3 0.29 是更彻底的解法，
-> 但涉及跨 6 个小版本的 API 变更，尚未进行。
-
 ### 运行测试
 
 ```bash
@@ -286,6 +275,22 @@ Socket.IO 的连接具有状态，横向扩展多个 worker 时需要配置消�
 - 多车联动与防碰撞调度
 
 项目因业务变更中止，上述三项停留在接口定义阶段。
+
+### 静态与动态障碍物目前没有实质区别
+
+两类障碍物分属两个集合（Python 的 `static_obstacles` / `dynamic_obstacles`，
+Rust 的两个 `HashMap`），但在进入规划前会被合并成同一个列表：
+
+```python
+all_obs = list(self.static_obstacles.values()) + list(self.dynamic_obstacles.values())
+```
+
+`Obstacle` 结构体也没有任何区分字段，膨胀、碰撞检测与搜索对两者一视同仁。
+当前唯一的差异是前端 2D 画布的填充色。
+
+这个划分本应是有意义的——静态障碍物可以一次性烘焙进基础栅格，
+动态障碍物叠加其上并只触发增量更新，这正是 D\* Lite 的适用场景。
+现有实现每次都全量合并重建，静态部分的可复用性没有被利用。
 
 ### 跨引擎行为差异
 

@@ -1,3 +1,8 @@
+// common/common.rs 与父模块同名。保留该布局是因为 common.rs 存放的是
+// 真正的共享类型（Node / FlatGrid / 网格解析），而 constants.rs 是纯常量，
+// 拆开比合并成一个大文件更清晰。
+#![allow(clippy::module_inception)]
+
 pub mod common;
 pub mod constants;
 

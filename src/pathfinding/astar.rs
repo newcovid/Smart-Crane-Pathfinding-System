@@ -146,14 +146,14 @@ impl RustAStarPlanner {
     /// 执行 A* 路径搜索。
     ///
     /// # Returns
-    /// 返回元组 `(Option<Vec<PyObject>>, usize)`:
-    /// * `Option<Vec<PyObject>>`: 成功时包含路径点列表（Python对象），失败时为 None。
+    /// 返回元组 `(Option<Vec<Py<PyAny>>>, usize)`:
+    /// * `Option<Vec<Py<PyAny>>>`: 成功时包含路径点列表（Python对象），失败时为 None。
     /// * `usize`: 本次搜索扩展的节点总数。
     pub fn compute_path(
         &self,
         current_pos: (i32, i32, i32),
         goal_pos: (i32, i32, i32),
-    ) -> (Option<Vec<PyObject>>, usize) {
+    ) -> (Option<Vec<Py<PyAny>>>, usize) {
         let start = Node::new(current_pos.0, current_pos.1, current_pos.2);
         let goal = Node::new(goal_pos.0, goal_pos.1, goal_pos.2);
 
@@ -365,7 +365,7 @@ impl RustAStarPlanner {
     }
 
     /// 从 came_from 映射中重建路径。
-    fn reconstruct_path(&self, came_from: HashMap<Node, Node>, current: Node) -> Vec<PyObject> {
+    fn reconstruct_path(&self, came_from: HashMap<Node, Node>, current: Node) -> Vec<Py<PyAny>> {
         let mut path = Vec::new();
         let mut curr = current;
         path.push(curr);

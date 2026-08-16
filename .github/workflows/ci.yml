@@ -65,14 +65,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # fmt 与 clippy 暂设为 advisory：首次跑通、确认现有代码已合规之后，
-      # 删掉 continue-on-error 即可转为强制门禁。
-      - name: cargo fmt（advisory）
-        continue-on-error: true
+      - name: cargo fmt
         run: cargo fmt --all -- --check
 
-      - name: cargo clippy（advisory）
-        continue-on-error: true
+      - name: cargo clippy
         run: cargo clippy --all-targets -- -D warnings
 
       - name: 构建并安装扩展

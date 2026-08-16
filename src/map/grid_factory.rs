@@ -38,7 +38,7 @@ impl GridFactory {
                     None => true,
                 }
             })
-            .map(|&o| o)
+            .copied()
             .collect();
 
         let result = if active_obstacles.len() > OBSTACLE_COUNT_THRESHOLD {
@@ -65,6 +65,9 @@ impl GridFactory {
     }
 
     // ... (create_2d_via_painting 和 create_2d_via_edt 保持不变) ...
+    // 参数均为彼此独立的物理量（尺寸、分辨率、边距、阈值），
+    // 打包成 struct 只会增加一层间接，不提升可读性。
+    #[allow(clippy::too_many_arguments)]
     fn create_2d_via_painting(
         rows: i32,
         cols: i32,
@@ -188,6 +191,9 @@ impl GridFactory {
     // 3D 网格生成 (3D Voxel Grid Generation)
     // =========================================================================
 
+    // 参数均为彼此独立的物理量（尺寸、分辨率、边距、阈值），
+    // 打包成 struct 只会增加一层间接，不提升可读性。
+    #[allow(clippy::too_many_arguments)]
     pub fn create_3d_voxel_grid(
         rows: i32,
         cols: i32,
@@ -245,6 +251,9 @@ impl GridFactory {
     }
 
     // ... (create_height_map_painting, compute_edt_squared, compute_1d_parabolic_lower_envelope 保持不变) ...
+    // 参数均为彼此独立的物理量（尺寸、分辨率、边距、阈值），
+    // 打包成 struct 只会增加一层间接，不提升可读性。
+    #[allow(clippy::too_many_arguments)]
     fn create_height_map_painting(
         rows: i32,
         cols: i32,
@@ -319,7 +328,7 @@ impl GridFactory {
         height_map
     }
 
-    fn compute_edt_squared(grid: &Vec<Vec<bool>>, rows: usize, cols: usize) -> Vec<Vec<f32>> {
+    fn compute_edt_squared(grid: &[Vec<bool>], rows: usize, cols: usize) -> Vec<Vec<f32>> {
         let inf = 1e9_f32;
         let mut g = vec![vec![inf; cols]; rows];
         for r in 0..rows {
@@ -355,6 +364,9 @@ impl GridFactory {
         dt
     }
 
+    // 循环变量 k 本身要参与 (k - i)^2 的距离计算，改写成迭代器需要
+    // 额外携带下标，且此处有基于距离的提前 break，可读性反而下降。
+    #[allow(clippy::needless_range_loop)]
     fn compute_1d_parabolic_lower_envelope(input: &[f32]) -> Vec<f32> {
         let n = input.len();
         let mut output = vec![0.0; n];

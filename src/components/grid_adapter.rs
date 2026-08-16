@@ -33,22 +33,22 @@ impl RustGridAdapter {
         _map_mgr: &RustMapManager,
         roi_bounds: (i32, i32, i32, i32, i32, i32),
         is_3d: bool,
-    ) -> PyResult<Vec<PyObject>> {
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let start_time = Instant::now();
         let (r_start, r_end, c_start, c_end, l_start, l_end) = roi_bounds;
         let mut changes = Vec::new();
 
         // 尝试将输入转换为 PyList
-        let new_rows = new_grid.downcast::<PyList>()?;
+        let new_rows = new_grid.cast::<PyList>()?;
 
         // old_grid 可能是 None
         let old_rows_opt = if !old_grid.is_none() {
-            Some(old_grid.downcast::<PyList>()?)
+            Some(old_grid.cast::<PyList>()?)
         } else {
             None
         };
 
-        let result = Python::with_gil(|py| {
+        let result = Python::attach(|py| {
             for r in r_start..r_end {
                 // 边界检查与安全获取行
                 if r < 0 || (r as usize) >= new_rows.len() {
@@ -56,14 +56,14 @@ impl RustGridAdapter {
                 }
 
                 let new_row_obj = new_rows.get_item(r as usize)?;
-                let new_row_list = new_row_obj.downcast::<PyList>()?;
+                let new_row_list = new_row_obj.cast::<PyList>()?;
 
                 // [Fix] 使用 clone() 解决 lifetime 问题
                 // downcast 返回引用，item 在 scope 结束销毁，必须 clone 增加引用计数
                 let old_row_list_opt = if let Some(old_rows) = old_rows_opt {
                     if r >= 0 && (r as usize) < old_rows.len() {
                         let item = old_rows.get_item(r as usize)?;
-                        Some(item.downcast::<PyList>()?.clone())
+                        Some(item.cast::<PyList>()?.clone())
                     } else {
                         None
                     }
@@ -90,19 +90,19 @@ impl RustGridAdapter {
 
                         if val_new != val_old {
                             // PyO3 0.23: 使用 PyTuple::new 构建
-                            let tuple_obj = PyTuple::new(py, &[r, c, val_new])?;
+                            let tuple_obj = PyTuple::new(py, [r, c, val_new])?;
                             changes.push(tuple_obj.into_any().unbind());
                         }
                     } else {
                         // === 3D 处理 ===
                         let new_layer_obj = new_row_list.get_item(c as usize)?;
-                        let new_layer_list = new_layer_obj.downcast::<PyList>()?;
+                        let new_layer_list = new_layer_obj.cast::<PyList>()?;
 
                         // [Fix] 同样使用 clone()
                         let old_layer_list_opt = if let Some(old_row) = old_row_list_opt.as_ref() {
                             if c >= 0 && (c as usize) < old_row.len() {
                                 let item = old_row.get_item(c as usize)?;
-                                Some(item.downcast::<PyList>()?.clone())
+                                Some(item.cast::<PyList>()?.clone())
                             } else {
                                 None
                             }
@@ -126,7 +126,7 @@ impl RustGridAdapter {
                             }
 
                             if val_new != val_old {
-                                let tuple_obj = PyTuple::new(py, &[r, c, l, val_new])?;
+                                let tuple_obj = PyTuple::new(py, [r, c, l, val_new])?;
                                 changes.push(tuple_obj.into_any().unbind());
                             }
                         }
@@ -160,13 +160,13 @@ impl RustGridAdapter {
         end: (f32, f32, f32),
         map_mgr: &RustMapManager,
         settings_tuple: (bool, f32, f32, f32),
-    ) -> PyResult<(PyObject, PyObject, f32)> {
+    ) -> PyResult<(Py<PyAny>, Py<PyAny>, f32)> {
         let (s_x, s_y, s_z) = start;
         let (e_x, e_y, e_z) = end;
         let (is_fixed_height, cruise_z_cfg, z_margin, min_offset) = settings_tuple;
 
         // 使用 with_gil 返回计算结果，解决变量初始化和可变性问题
-        Python::with_gil(|py| -> PyResult<(PyObject, PyObject, f32)> {
+        Python::attach(|py| -> PyResult<(Py<PyAny>, Py<PyAny>, f32)> {
             let start_node_obj;
             let end_node_obj;
             let final_cruise_z;
@@ -178,8 +178,8 @@ impl RustGridAdapter {
                 let (r_e, c_e, _) = map_mgr.world_to_grid(e_x, e_y, 0.0);
 
                 // 使用 PyTuple::new 构建 Python 元组
-                start_node_obj = PyTuple::new(py, &[r_s, c_s])?.into_any().unbind();
-                end_node_obj = PyTuple::new(py, &[r_e, c_e])?.into_any().unbind();
+                start_node_obj = PyTuple::new(py, [r_s, c_s])?.into_any().unbind();
+                end_node_obj = PyTuple::new(py, [r_e, c_e])?.into_any().unbind();
             } else {
                 // 3D: 高度修正与映射
                 final_cruise_z = 0.0;
@@ -190,8 +190,8 @@ impl RustGridAdapter {
                 let (r_s, c_s, l_s) = map_mgr.world_to_grid(s_x, s_y, plan_s_z);
                 let (r_e, c_e, l_e) = map_mgr.world_to_grid(e_x, e_y, plan_e_z);
 
-                start_node_obj = PyTuple::new(py, &[r_s, c_s, l_s])?.into_any().unbind();
-                end_node_obj = PyTuple::new(py, &[r_e, c_e, l_e])?.into_any().unbind();
+                start_node_obj = PyTuple::new(py, [r_s, c_s, l_s])?.into_any().unbind();
+                end_node_obj = PyTuple::new(py, [r_e, c_e, l_e])?.into_any().unbind();
             }
 
             Ok((start_node_obj, end_node_obj, final_cruise_z))
@@ -206,7 +206,7 @@ impl RustGridAdapter {
         map_mgr: &RustMapManager,
     ) -> PyResult<(f32, f32, f32)> {
         // 尝试将输入对象转换为 Tuple
-        let tuple = node.downcast::<PyTuple>()?;
+        let tuple = node.cast::<PyTuple>()?;
         let len = tuple.len();
 
         if len == 2 {

@@ -258,7 +258,7 @@ impl RustDLitePlanner {
     pub fn compute_path(
         &mut self,
         current_pos: (i32, i32, i32),
-    ) -> (Option<Vec<PyObject>>, usize, usize) {
+    ) -> (Option<Vec<Py<PyAny>>>, usize, usize) {
         let curr_node = Node::new(current_pos.0, current_pos.1, current_pos.2);
         let start_nodes_count = self.nodes_expanded_stat.load(AtomicOrdering::Relaxed);
 

@@ -6,11 +6,13 @@
 /// 直线移动代价 (1.0)
 pub const COST_1: f32 = 1.0;
 
-/// 2D 对角线移动代价 (sqrt(2) ≈ 1.41421356)
-pub const COST_2: f32 = 1.41421356;
+/// 2D 对角线移动代价 sqrt(2)。
+/// 使用标准库常量而非手写近似值：手写字面量与 Python 侧的 math.sqrt(2)
+/// 存在末位差异，会让两个引擎在代价相等的路径上做出不同的 tie-break。
+pub const COST_2: f32 = std::f32::consts::SQRT_2;
 
-/// 3D 对角线移动代价 (sqrt(3) ≈ 1.73205081)
-pub const COST_3: f32 = 1.73205081;
+/// 3D 对角线移动代价 sqrt(3)。标准库未提供该常量，保留字面量。
+pub const COST_3: f32 = 1.732_050_8;
 
 /// 浮点数无穷大
 pub const INF: f32 = f32::INFINITY;

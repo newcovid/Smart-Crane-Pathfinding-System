@@ -19,6 +19,9 @@ impl BezierSmoother {
     /// * `ignore_z` - 是否忽略高度检测。
     /// * `grace_start` - 豁免区起点。
     /// * `grace_end` - 豁免区终点。
+    // 参数均为彼此独立的物理量（尺寸、分辨率、边距、阈值），
+    // 打包成 struct 只会增加一层间接，不提升可读性。
+    #[allow(clippy::too_many_arguments)]
     pub fn process(
         path: Vec<(f32, f32, f32)>,
         map: &RustMapManager,

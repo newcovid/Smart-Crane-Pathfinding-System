@@ -16,8 +16,8 @@ impl Node {
         Self { x, y, z }
     }
 
-    pub fn to_tuple(&self, is_3d: bool) -> PyObject {
-        Python::with_gil(|py| {
+    pub fn to_tuple(self, is_3d: bool) -> Py<PyAny> {
+        Python::attach(|py| {
             if is_3d {
                 let elements = [self.x, self.y, self.z];
                 PyTuple::new(py, elements).unwrap().into_any().unbind()
@@ -97,7 +97,7 @@ impl FlatGrid {
 pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
     let start_time = Instant::now(); // 开始计时
 
-    let rows_list = py_grid.downcast::<PyList>()?;
+    let rows_list = py_grid.cast::<PyList>()?;
     let rows = rows_list.len() as i32;
     if rows == 0 {
         return Ok(FlatGrid {
@@ -112,7 +112,7 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
     let first_row_obj = rows_list.get_item(0)?;
 
     // --- Case A: 2D Grid with Bytes (List[bytes]) ---
-    if let Ok(first_bytes) = first_row_obj.downcast::<PyBytes>() {
+    if let Ok(first_bytes) = first_row_obj.cast::<PyBytes>() {
         let cols = first_bytes.len()? as i32;
         let layers = 1;
         let total_size = (rows * cols) as usize;
@@ -120,7 +120,7 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
 
         for r in 0..rows {
             let row_obj = rows_list.get_item(r as usize)?;
-            let row_bytes = row_obj.downcast::<PyBytes>()?;
+            let row_bytes = row_obj.cast::<PyBytes>()?;
             data.extend_from_slice(row_bytes.as_bytes());
         }
 
@@ -138,7 +138,7 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
         });
     }
 
-    let first_row_list = first_row_obj.downcast::<PyList>()?;
+    let first_row_list = first_row_obj.cast::<PyList>()?;
     let cols = first_row_list.len() as i32;
 
     if cols == 0 {
@@ -153,17 +153,17 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
     let first_col_obj = first_row_list.get_item(0)?;
 
     // --- Case B: 3D Grid with Bytes (List[List[bytes]]) ---
-    if let Ok(layer_bytes) = first_col_obj.downcast::<PyBytes>() {
+    if let Ok(layer_bytes) = first_col_obj.cast::<PyBytes>() {
         let layers = layer_bytes.len()? as i32;
         let total_size = (rows * cols * layers) as usize;
         let mut data = Vec::with_capacity(total_size);
 
         for r in 0..rows {
             let row_obj = rows_list.get_item(r as usize)?;
-            let row_list = row_obj.downcast::<PyList>()?;
+            let row_list = row_obj.cast::<PyList>()?;
             for c in 0..cols {
                 let col_obj = row_list.get_item(c as usize)?;
-                let col_bytes = col_obj.downcast::<PyBytes>()?;
+                let col_bytes = col_obj.cast::<PyBytes>()?;
                 data.extend_from_slice(col_bytes.as_bytes());
             }
         }
@@ -185,7 +185,7 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
     // --- Case C: Standard Python List ---
     let is_3d_list = first_col_obj.is_instance_of::<PyList>();
     let layers = if is_3d_list {
-        first_col_obj.downcast::<PyList>()?.len() as i32
+        first_col_obj.cast::<PyList>()?.len() as i32
     } else {
         1
     };
@@ -195,11 +195,11 @@ pub fn parse_python_grid(py_grid: &Bound<PyAny>) -> PyResult<FlatGrid> {
 
     for r in 0..rows {
         let row_obj = rows_list.get_item(r as usize)?;
-        let row_list = row_obj.downcast::<PyList>()?;
+        let row_list = row_obj.cast::<PyList>()?;
         for c in 0..cols {
             let col_item = row_list.get_item(c as usize)?;
             if is_3d_list {
-                let layer_list = col_item.downcast::<PyList>()?;
+                let layer_list = col_item.cast::<PyList>()?;
                 for l in 0..layers {
                     let val: u8 = layer_list.get_item(l as usize)?.extract()?;
                     data.push(val);
