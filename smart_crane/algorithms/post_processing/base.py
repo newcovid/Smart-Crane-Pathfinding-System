@@ -14,7 +14,10 @@ from typing import (
 )
 
 # 导入常量
-from smart_crane.core.constants import PERFORMANCE_WARNING_THRESHOLD_MS
+from smart_crane.core.constants import (
+    PERFORMANCE_WARNING_THRESHOLD_MS,
+    TIME_MS_MULTIPLIER,
+)
 
 if TYPE_CHECKING:
     from smart_crane.core.map_manager import WorkshopMapManager

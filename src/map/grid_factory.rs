@@ -253,7 +253,6 @@ impl GridFactory {
         grid_3d
     }
 
-    // ... (create_height_map_painting, compute_edt_squared, compute_1d_parabolic_lower_envelope 保持不变) ...
     // 参数均为彼此独立的物理量（尺寸、分辨率、边距、阈值），
     // 打包成 struct 只会增加一层间接，不提升可读性。
     #[allow(clippy::too_many_arguments)]
@@ -359,7 +358,7 @@ impl GridFactory {
         let mut dt = vec![vec![0.0; cols]; rows];
         for c in 0..cols {
             let col_g: Vec<f32> = (0..rows).map(|r| g[r][c]).collect();
-            let col_dt = Self::compute_1d_parabolic_lower_envelope(&col_g);
+            let col_dt = Self::compute_1d_squared_edt(&col_g);
             for r in 0..rows {
                 dt[r][c] = col_dt[r];
             }
@@ -367,10 +366,22 @@ impl GridFactory {
         dt
     }
 
-    // 循环变量 k 本身要参与 (k - i)^2 的距离计算，改写成迭代器需要
-    // 额外携带下标，且此处有基于距离的提前 break，可读性反而下降。
+    /// 一维平方距离变换：对每个 i 求 `min_k (input[k] + (i - k)^2)`。
+    ///
+    /// 这是可分离 EDT 的第二趟。此处采用带提前退出的双向扫描，**不是**
+    /// Felzenszwalb & Huttenlocher 的 O(n) 抛物线下包络算法——后者需要维护
+    /// 一个抛物线栈与分界点数组。
+    ///
+    /// 之所以够用：`input` 非负，因此一旦 `(i - k)^2 >= min_val`，
+    /// 更远的 k 不可能更优，可以立即 break。C-Space 膨胀里的 margin 只有
+    /// 几个格，`min_val` 很快收敛到小值，实际扫描长度是 `O(sqrt(min_val))`
+    /// 而非 `O(n)`。若将来要对整幅图求完整距离场（而非阈值化的膨胀层），
+    /// 这里的最坏复杂度会退化到 `O(n^2)`，届时应换成下包络算法。
+    ///
+    /// 循环变量 k 要参与 `(k - i)^2` 的计算，改写成迭代器需额外携带下标，
+    /// 且提前 break 的表达会变差，故保留索引循环。
     #[allow(clippy::needless_range_loop)]
-    fn compute_1d_parabolic_lower_envelope(input: &[f32]) -> Vec<f32> {
+    fn compute_1d_squared_edt(input: &[f32]) -> Vec<f32> {
         let n = input.len();
         let mut output = vec![0.0; n];
         for i in 0..n {

@@ -38,7 +38,7 @@ impl PartialOrd for DKey {
 
 /// 优先队列中的元素。
 ///
-/// 注意：BinaryHeap 是最大堆，而我们需要最小 Key 优先。
+/// 注意：BinaryHeap 是最大堆，而此处需要最小 Key 优先。
 /// 因此在 Ord 实现中反转了 Key 的比较顺序。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PriorityItem {
@@ -83,7 +83,7 @@ pub struct RustDLitePlanner {
     /// 辅助映射，记录节点当前在队列中的 Key，用于去重和懒惰删除检查。
     open_keys: HashMap<Node, (f32, f32)>,
     /// Key Modifier (km): 累积的启发式偏移量。
-    /// 当机器人（起点）移动时，为了避免更新整个堆中所有节点的 H 值，我们通过增加 km 来隐式调整。
+    /// 当机器人（起点）移动时，为避免更新堆中所有节点的 H 值，改为累加 km 以隐式补偿。
     km: f32,
 
     // --- 导航状态 ---

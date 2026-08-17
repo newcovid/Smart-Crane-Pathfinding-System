@@ -25,8 +25,8 @@ struct AStarItem {
 impl Ord for AStarItem {
     fn cmp(&self, other: &Self) -> Ordering {
         // Rust 的 BinaryHeap 默认为最大堆 (pop 取最大值)。
-        // 我们需要最小 f_score 优先，因此反转比较顺序 (other.cmp(self))。
-        // 当 f_score 相同时，比较 node 坐标 (模拟 Python 的稳定排序行为，通常选坐标较小的)。
+        // 此处需要最小 f_score 优先，因此反转比较顺序 (other.cmp(self))。
+        // 当 f_score 相同时，比较 node 坐标，与 Python 侧的 tie-break 规则一致（取坐标字典序较小者）。
         match other.f_score.cmp(&self.f_score) {
             Ordering::Equal => other.node.cmp(&self.node),
             ord => ord,

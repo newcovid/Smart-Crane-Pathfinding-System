@@ -1,8 +1,20 @@
+"""前端依赖离线本地化脚本。
+
+把 `TASKS` 中声明的第三方资源从 CDN 拉取到 `static/vendor/`，
+使运行时不再访问外部网络。CSS 类型的任务会递归解析其中的 `url(...)`
+引用，一并下载字体与图片。
+
+需要 `requirements-dev.txt` 中的 `requests`。全部任务成功时退出码为 0，
+存在失败时为 1。
+"""
+
 import os
 import re
-import requests
+import sys
 import logging
 from urllib.parse import urljoin
+
+import requests
 
 # 配置日志
 logging.basicConfig(
@@ -14,8 +26,7 @@ logger = logging.getLogger("SmartDepManager")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VENDOR_DIR = os.path.join(BASE_DIR, "static", "vendor")
 
-# CDN 镜像源配置 (主源 + 备用源)
-# 我们优先使用 jsDelivr，因为它在国内通常更稳定
+# CDN 镜像源配置（主源 + 备用源），按声明顺序依次尝试
 MIRRORS = {
     "jsdelivr": "https://cdn.jsdelivr.net/npm",
     "unpkg": "https://unpkg.com",
@@ -75,8 +86,8 @@ TASKS = [
         "url": "{mirror}/@phosphor-icons/web@2.1.1/src/fill/style.css",
         "type": "css_bundle",
     },
-    # --- 字体美化 (Inter Font) ---
-    # 既然追求美观，我们把 Inter 字体也离线下来
+    # --- 界面字体 (Inter) ---
+    # 字体文件同样本地化，否则首屏会回落到系统字体并产生布局抖动
     {
         "name": "inter-font",
         "path": "fonts/inter.css",
@@ -95,7 +106,7 @@ def get_with_retry(url_template):
     # 如果不是模板URL（没有{mirror}），直接请求
     if "{mirror}" not in url_template:
         try:
-            logger.info(f"⬇️  下载: {url_template}")
+            logger.info(f"下载: {url_template}")
             resp = requests.get(url_template, timeout=15)
             resp.raise_for_status()
             return resp.content, url_template
@@ -107,11 +118,11 @@ def get_with_retry(url_template):
     for mirror_name, mirror_base in MIRRORS.items():
         url = url_template.format(mirror=mirror_base)
         try:
-            logger.info(f"⬇️  [{mirror_name}] 下载: {url}")
+            logger.info(f"[{mirror_name}] 下载: {url}")
             resp = requests.get(url, timeout=10)
             if resp.status_code == 404:
                 # 404 可能是路径不对，尝试下一个镜像
-                logger.warning(f"   404 Not Found, 尝试下一个源...")
+                logger.warning("   404 Not Found，尝试下一个源")
                 continue
             resp.raise_for_status()
             return resp.content, url
@@ -132,7 +143,7 @@ def process_css_bundle(css_content, css_url, local_css_rel_path):
 
     css_dir = os.path.dirname(os.path.join(VENDOR_DIR, local_css_rel_path))
 
-    logger.info(f"   🔍 在 CSS 中发现 {len(urls)} 个资源引用")
+    logger.info(f"  CSS 中发现 {len(urls)} 个资源引用")
 
     for relative_url in urls:
         # 忽略 data: base64
@@ -144,10 +155,8 @@ def process_css_bundle(css_content, css_url, local_css_rel_path):
 
         # 简单处理一下 URL 参数 (如 font.woff2?v=3.19 -> font.woff2)
         clean_filename = relative_url.split("?")[0].split("#")[0]
-        # 修正：有些 url 是 ../ 开头的，我们需要保持相对目录结构，或者展平
-        # 这里为了简单，我们直接下载到 CSS 同级目录，但需要处理 ../
-        # 最稳妥的方法是：保持相对路径结构
-
+        # 保持上游的相对目录结构，而非展平到同一层——
+        # 展平会让两个同名字体文件互相覆盖。
         asset_local_path = os.path.join(css_dir, relative_url.split("?")[0])
 
         # 路径穿越校验：远程 CSS 里的 url(../../x) 会被 os.path.join 如实解析，
@@ -157,14 +166,14 @@ def process_css_bundle(css_content, css_url, local_css_rel_path):
         if os.path.commonpath([resolved, os.path.realpath(VENDOR_DIR)]) != os.path.realpath(
             VENDOR_DIR
         ):
-            logger.error(f"   ⚠ 跳过越界资源路径: {relative_url} -> {resolved}")
+            logger.error(f"  跳过越界资源路径: {relative_url} -> {resolved}")
             continue
 
         # 下载资源
         try:
-            logger.info(f"   📦 下载资源: {clean_filename}")
-            # 这里使用直接 requests，因为资源 URL 已经是绝对的了
-            # 同时也加上重试机制（简单的）
+            logger.info(f"  下载资源: {clean_filename}")
+            # CSS 内的资源 URL 经 urljoin 后已是绝对地址，不适用镜像替换，
+            # 因此直接请求，不走 get_with_retry 的多源逻辑。
             asset_resp = requests.get(asset_remote_url, timeout=15)
             if asset_resp.status_code == 200:
                 ensure_dir(asset_local_path)
@@ -172,21 +181,19 @@ def process_css_bundle(css_content, css_url, local_css_rel_path):
                     f.write(asset_resp.content)
             else:
                 logger.error(
-                    f"   ❌ 资源下载失败 {asset_resp.status_code}: {asset_remote_url}"
+                    f"  资源下载失败 {asset_resp.status_code}: {asset_remote_url}"
                 )
         except Exception as e:
-            logger.error(f"   ❌ 资源下载异常: {asset_remote_url} - {e}")
+            logger.error(f"  资源下载异常: {asset_remote_url} - {e}")
 
     return css_content
 
 
 def main():
-    print("=" * 60)
-    print("   🚀 智能起重机控制台 - 依赖同步工具")
-    print("   集成镜像加速与 CSS 资源解析")
-    print("=" * 60)
+    logger.info("开始同步前端依赖，共 %d 项，目标目录 %s", len(TASKS), VENDOR_DIR)
 
     success_count = 0
+    failed = []
 
     for task in TASKS:
         local_path = os.path.join(VENDOR_DIR, task["path"])
@@ -205,18 +212,18 @@ def main():
             with open(local_path, "wb") as f:
                 f.write(content)
 
-            logger.info(f"✅ 已保存: {task['path']}\n")
+            logger.info("已保存: %s", task["path"])
             success_count += 1
         else:
-            logger.error(f"❌ 彻底失败: {task['name']}\n")
+            logger.error("下载失败（已穷尽全部镜像）: %s", task["name"])
+            failed.append(task["name"])
 
-    print("=" * 60)
-    print(f"同步完成: {success_count}/{len(TASKS)}")
-    if success_count == len(TASKS):
-        print("🎉所有资源（含字体）已本地化，界面将足够美观且无需联网。")
-    else:
-        print("⚠️ 部分失败，请检查网络。核心功能可能仍可用，但图标可能缺失。")
+    logger.info("同步完成: %d/%d", success_count, len(TASKS))
+    if failed:
+        logger.error("以下资源缺失，界面图标或字体将无法离线加载: %s", ", ".join(failed))
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -14,7 +14,7 @@
     <!-- 2. 核心样式 & 字体 -->
     <link rel="stylesheet" href="/static/css/style.css">
     
-    <!-- [新增] 本地化 Inter 字体 (顶级 UI 字体) -->
+    <!-- 本地化 Inter 字体 (顶级 UI 字体) -->
     <link rel="stylesheet" href="/static/vendor/fonts/inter.css">
     
     <!-- 3. 本地化图标库 (Phosphor) -->
@@ -33,7 +33,7 @@
                 extend: { 
                     colors: { primary: '#3b82f6', darkbg: '#0f172a', lightbg: '#f8fafc', success: '#10b981', danger: '#f43f5e' },
                     fontFamily: { 
-                        // [修改] 将 'Inter' 设为首选，并关联我们本地下载的字体
+                        // 将 'Inter' 设为首选，指向本地化后的字体文件
                         sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'sans-serif'], 
                         mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'monospace'] 
                     },
@@ -166,7 +166,7 @@
                     </section-group>
 
                     <section-group title="路径算法核心" icon="ph-bold ph-cpu">
-                        <!-- [修复] Rust 加速开关: 将 div 改为 label 以确保点击触发 input -->
+                        <!-- Rust 加速开关: 将 div 改为 label 以确保点击触发 input -->
                         <div class="mb-3 pb-3 border-b border-slate-100 dark:border-slate-700/50">
                             <div class="flex items-center justify-between mb-1">
                                 <div class="flex items-center gap-1.5">

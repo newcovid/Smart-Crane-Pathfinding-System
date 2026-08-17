@@ -46,7 +46,7 @@ const app = createApp({
                 OBSTACLE_INFINITE_HEIGHT: true,
                 DEFAULT_OBSTACLE_HEIGHT_M: 2.0,
                 PLANNER_ALGORITHM: 'astar',
-                // [新增] Rust 加速开关默认开启
+                // Rust 加速开关默认开启
                 ENABLE_RUST_CORE: true,
                 USE_3D_OCTILE: false,
                 ENABLE_SHORTCUT_OPTIMIZATION: true,
@@ -88,7 +88,7 @@ const app = createApp({
         const notifications = ref([]);
 
         const notify = (type, message, title = '') => {
-            // [优化] 限制最大弹窗数量为 4 条
+            // 限制最大弹窗数量为 4 条
             if (notifications.value.length >= 4) {
                 // 移除最旧的一条
                 notifications.value.shift();
@@ -259,7 +259,7 @@ const app = createApp({
         };
 
         const requestPlan = () => {
-            // [优化] 将 settings 包含在 payload 中，确保后端原子化处理
+            // 将 settings 包含在 payload 中，确保后端原子化处理
             const payload = {
                 start: state.missionState.start,
                 end: state.missionState.end,
@@ -292,7 +292,7 @@ const app = createApp({
                     let w = snap(Math.abs(pos.x - s.x));
                     let h = snap(Math.abs(pos.y - s.y));
 
-                    // [修改] 优化拖拽结束后的最小尺寸判定
+                    // 优化拖拽结束后的最小尺寸判定
                     // 原逻辑为 resolution * 2 (强制 2x2)，现改为 resolution (允许 1x1)
                     // 使用 || 0.5 防止 resolution 未加载时出错
                     const minRes = state.mapState.resolution || 0.5;
@@ -337,7 +337,7 @@ const app = createApp({
                 const c = { x: cx, y: cy };
 
                 if (e.setPreview) {
-                    // [修改] 优化拖拽时的视觉反馈
+                    // 优化拖拽时的视觉反馈
                     // 将默认预览尺寸从硬编码的 1 改为当前网格分辨率
                     // 这样拖拽初期显示的框体大小就和网格完全对齐，手感更"跟手"
                     const minRes = state.mapState.resolution || 0.5;

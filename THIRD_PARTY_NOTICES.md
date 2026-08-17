@@ -58,6 +58,6 @@ Vue、Three.js、Socket.IO 的压缩产物文件头自带版权与许可证声�
 Tailwind CSS 的浏览器构建版、Inter 与 Phosphor 的字体二进制不含内嵌声明，
 其许可证全文请从上表链接的上游仓库获取。
 
-如果你要把本项目用于对外分发（而非自用或演示），
-**请先把各组件的 LICENSE 全文放入 `static/vendor/LICENSES/`**——
-SIL OFL 1.1 对随附许可证全文是强制要求，MIT 也要求保留版权声明。
+将本项目用于对外分发（而非自用或演示）时，
+**须先将各组件的 LICENSE 全文置于 `static/vendor/LICENSES/`**——
+SIL OFL 1.1 对随附许可证全文是强制要求，MIT 亦要求保留版权声明。

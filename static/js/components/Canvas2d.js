@@ -35,14 +35,14 @@ export default {
         const ctx = ref(null);
         const resizeObserver = ref(null);
 
-        // [优化] 使用全局状态初始化本地响应式数据
+        // 使用全局状态初始化本地响应式数据
         const view = reactive({
             scale: globalViewState.scale,
             offsetX: globalViewState.offsetX,
             offsetY: globalViewState.offsetY
         });
 
-        // [优化] 双向同步：本地变化 -> 写入全局
+        // 双向同步：本地变化 -> 写入全局
         watch(view, (newVal) => {
             globalViewState.scale = newVal.scale;
             globalViewState.offsetX = newVal.offsetX;
@@ -310,7 +310,7 @@ export default {
         };
 
         const tryInitializeView = () => {
-            // [核心] 检查全局状态，如果全局已经初始化过，就不再重置视角
+            // 检查全局状态，如果全局已经初始化过，就不再重置视角
             if (globalViewState.hasInitialized) return;
             if (!container.value || container.value.clientWidth === 0) return;
 

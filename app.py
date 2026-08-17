@@ -318,7 +318,7 @@ def handle_request_path(data: Dict[str, Any]) -> None:
     Args:
         data (Dict[str, Any]): 包含起点/终点等任务参数，以及可选的配置更新数据(settings)。
     """
-    # [优化] 1. 优先处理请求中携带的配置更新
+    # 1. 优先处理请求中携带的配置更新
     # 这样确保了在同一逻辑流中，配置更新绝对先于路径规划完成
     if "settings" in data:
         logger.debug("规划请求包含配置数据，正在应用配置...")

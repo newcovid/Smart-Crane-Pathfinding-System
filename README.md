@@ -14,6 +14,13 @@ Rust 算法核心 · Python 业务层 · Web 数字孪生。
 
 简体中文 · [English](README.en.md)
 
+<br>
+
+<img src="docs/media/dstar-replanning.gif" width="820" alt="D* Lite 在障碍物变化后只重算受影响的节点">
+
+<sub>障碍物出现后，D\* Lite 只重算受影响的节点（图中高亮部分），而非重新搜索整张图。<br>
+画面中的节点序列与数值来自规划器的真实运行输出 · [完整技术介绍片（50 秒，MP4）](docs/media/overview.mp4)</sub>
+
 </div>
 
 ---
@@ -30,6 +37,7 @@ Rust 算法核心 · Python 业务层 · Web 数字孪生。
 - [限制与已知问题](#限制与已知问题)
 - [设计说明](#设计说明)
 - [开发](#开发)
+- [参考](#参考)
 - [许可证](#许可证)
 
 ---
@@ -145,9 +153,9 @@ C-Space 膨胀有两种实现，复杂度特性相反，按障碍物数量切换
 
 阈值定义于 `src/common/constants.rs`。
 
-两侧实现方式不同，构成交叉验证：Rust 侧为手写的两趟距离变换配合一维抛物线下包络
-（`src/map/grid_factory.rs`），Python 侧调用 `scipy.ndimage.distance_transform_edt`
-并配合形态学膨胀。
+两侧实现方式不同，构成交叉验证：Rust 侧为手写的可分离距离变换
+（行向两趟扫描 + 列向平方距离最小化，`src/map/grid_factory.rs`），
+Python 侧调用 `scipy.ndimage.distance_transform_edt` 并配合形态学膨胀。
 
 两条分支度量的都是**格心到栅格化种子格心**的距离，判据同为 `dist ≤ xy_margin + 0.5`。
 这一点必须严格对齐：若绘制分支改量到连续矩形，距离会系统性偏小，
@@ -187,9 +195,9 @@ C-Space 膨胀有两种实现，复杂度特性相反，按障碍物数量切换
 二者分离使得纯 Python 实现能够在已安装扩展的环境中被测试覆盖。
 `RustBackend.disabled()` 上下文管理器允许在单个进程内先后运行两套实现。
 
-> **等价性的准确含义**：两套实现保证**接口一致**与**路径代价等价**，不保证轨迹逐点相同。
-> Rust 使用 `f32`、Python 使用 `f64`，代价相同的多条路径在 tie-break 时可能选择不同分支。
-> 相关断言见 `tests/test_pathfinding.py::TestEngineEquivalence`。
+> **等价性的准确含义**：C-Space 膨胀网格逐格相同，D\* Lite 路径逐点相同，
+> A\* 仅保证路径代价相同——差异来自 `f32` 与 `f64` 的浮点宽度，两条路径都是最优解。
+> 逐项说明见[两个引擎的等价程度](#两个引擎的等价程度)，断言见 `tests/test_pathfinding.py::TestEngineEquivalence`。
 
 ---
 
@@ -286,8 +294,11 @@ Socket.IO 的连接具有状态，横向扩展多个 worker 时需要配置消�
 │   ├── map/                        # manager.rs / grid_factory.rs（手写 EDT）
 │   └── components/                 # safety_guard.rs / grid_adapter.rs
 ├── static/                         # Vue + Three.js 前端（vendor 已本地化）
+├── docs/media/                     # 演示 GIF 与技术介绍片
 ├── benchmarks/bench.py             # 性能基准，支持 --engine both
-└── tests/test_pathfinding.py       # 正确性与双引擎等价性测试
+└── tests/
+    ├── test_pathfinding.py         # 正确性与双引擎等价性
+    └── test_grid.py                # 静态层缓存与膨胀分支一致性
 ```
 
 ---
@@ -397,6 +408,21 @@ cargo fmt --all && cargo clippy --all-targets    # Rust 代码检查
 
 CI 在 Ubuntu 与 Windows 上分别运行纯 Python 与 Rust 两种配置，
 并在同一 runner 上产出双引擎基准对照。
+
+Issue 与 Pull Request 均欢迎。项目已停止功能开发，
+但正确性问题（尤其是双引擎行为不一致）会优先处理。
+
+---
+
+## 参考
+
+- Koenig, S. & Likhachev, M. *D\* Lite*. AAAI, 2002 —— 增量重规划的算法依据，
+  本项目实现了其中的基础版本（含 `km` 键偏移与懒惰删除）
+- Hart, P., Nilsson, N. & Raphael, B. *A Formal Basis for the Heuristic Determination
+  of Minimum Cost Paths*. IEEE TSSC, 1968
+- Felzenszwalb, P. & Huttenlocher, D. *Distance Transforms of Sampled Functions*.
+  Theory of Computing, 2012 —— 可分离 EDT 的 O(n) 下包络解法。Rust 侧当前使用的是
+  带提前退出的直接扫描而非该算法，原因见 `compute_1d_squared_edt` 的文档注释
 
 ---
 

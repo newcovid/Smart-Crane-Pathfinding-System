@@ -139,7 +139,6 @@ impl RustGridAdapter {
         // 记录耗时
         let duration = start_time.elapsed();
         if let Ok(ref chgs) = result {
-            // 强制打印日志，供你分析
             debug!(
                 "[Rust/GridAdapter] 增量Diff计算耗时: {:.2}ms (ROI: {}x{}x{}, Changes: {})",
                 duration.as_secs_f64() * 1000.0,

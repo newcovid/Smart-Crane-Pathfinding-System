@@ -20,7 +20,12 @@
 *.so     binary
 *.dll    binary
 *.pdf    binary
+*.mp4    binary
+*.webm   binary
 
 # 第三方前端资源不参与语言统计，也不在 diff 中展开
 static/vendor/**  linguist-vendored
 Cargo.lock        linguist-generated
+
+# 演示素材不参与语言统计
+docs/media/**     linguist-documentation

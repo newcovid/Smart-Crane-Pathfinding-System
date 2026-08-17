@@ -15,6 +15,15 @@ Rust algorithm core · Python service layer · Web digital twin.
 
 [简体中文](README.md) · English
 
+<br>
+
+<img src="docs/media/dstar-replanning.gif" width="820" alt="D* Lite recomputing only the affected nodes after an obstacle change">
+
+<sub>When an obstacle appears, D\* Lite recomputes only the affected nodes (highlighted)
+instead of searching the whole map again.<br>
+Every node sequence and number on screen is real planner output ·
+[Full technical overview (50 s, MP4)](docs/media/overview.mp4)</sub>
+
 </div>
 
 ---
@@ -144,8 +153,8 @@ selected by obstacle count:
 The threshold lives in `src/common/constants.rs`.
 
 The two sides are implemented differently, which provides cross-validation: the Rust
-side is a hand-written two-pass distance transform with a 1-D parabolic lower envelope
-(`src/map/grid_factory.rs`), while Python uses
+side is a hand-written separable distance transform (a two-sweep row pass followed by a
+column-wise squared-distance minimisation, `src/map/grid_factory.rs`), while Python uses
 `scipy.ndimage.distance_transform_edt` with morphological dilation.
 
 Both branches measure the distance from a cell centre to the nearest **rasterised seed
@@ -194,10 +203,11 @@ Separating them lets the pure-Python implementation be exercised by tests even o
 machines where the extension is installed. The `RustBackend.disabled()` context manager
 runs both implementations within a single process.
 
-> **What "equivalent" means here**: the two implementations guarantee an **identical
-> interface** and **equal path cost**, not point-by-point identical trajectories.
-> Rust uses `f32` and Python uses `f64`, so equal-cost paths may break ties differently.
-> See `tests/test_pathfinding.py::TestEngineEquivalence`.
+> **What "equivalent" means here**: the C-space inflated grid is identical cell by cell,
+> the D\* Lite path is identical point by point, and A\* guarantees equal cost only —
+> that difference comes from `f32` versus `f64` float width, and both paths are optimal.
+> See [How equivalent the two engines are](#how-equivalent-the-two-engines-are) for the
+> per-item breakdown, and `tests/test_pathfinding.py::TestEngineEquivalence` for the assertions.
 
 ---
 
@@ -393,6 +403,23 @@ cargo fmt --all && cargo clippy --all-targets    # Rust lints
 
 CI runs both the pure-Python and Rust configurations on Ubuntu and Windows, and
 produces a dual-engine benchmark comparison on a single runner.
+
+Issues and pull requests are welcome. Feature development has stopped, but
+correctness problems — especially divergence between the two engines — are triaged first.
+
+---
+
+## References
+
+- Koenig, S. & Likhachev, M. *D\* Lite*. AAAI, 2002 — the basis for the incremental
+  replanner; this project implements the basic variant (with the `km` key offset and
+  lazy deletion)
+- Hart, P., Nilsson, N. & Raphael, B. *A Formal Basis for the Heuristic Determination
+  of Minimum Cost Paths*. IEEE TSSC, 1968
+- Felzenszwalb, P. & Huttenlocher, D. *Distance Transforms of Sampled Functions*.
+  Theory of Computing, 2012 — the O(n) lower-envelope solution for a separable EDT.
+  The Rust side currently uses a direct scan with early exit instead; the rationale is
+  documented on `compute_1d_squared_edt`
 
 ---
 

@@ -336,7 +336,7 @@ class DLitePlanner(PathPlannerBase[NodeType]):
     # --- D* Lite 内部辅助函数 ---
 
     def _full_reset(self, start: NodeType, goal: NodeType):
-        """[新增] 全量重置搜索状态（相当于全新的 A*）。"""
+        """全量重置搜索状态（相当于全新的 A*）。"""
         self.start_node = start
         self.goal_node = goal
         self.last_start_node = start

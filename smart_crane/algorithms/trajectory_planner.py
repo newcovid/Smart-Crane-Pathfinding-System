@@ -455,9 +455,9 @@ class TrajectoryPlanner:
 
                 else:
                     # === 3D 模式 ===
-                    # 由于我们在 Phase 6 已经将 opt_cruise_path 的首尾点吸附为 exact_start 和 exact_end，
-                    # 且 Greedy 优化器已经拉直了路径，所以这里只需直接使用 opt_cruise_path。
-                    # 为保险起见，进行一次边界检查。
+                    # Phase 6 已把 opt_cruise_path 的首尾点吸附为 exact_start 与 exact_end，
+                    # 且 Greedy 优化器已拉直路径，此处直接使用 opt_cruise_path。
+                    # 仍保留一次边界检查作为兜底。
 
                     # 1. 补起点 (防止 path 被过度优化或脱困导致缺失)
                     if (
